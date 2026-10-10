@@ -1,0 +1,1 @@
+See the pinned NuGet package metadata and packages.lock.json for Svg.Skia/SkiaSharp/HarfBuzzSharp license and dependency provenance.

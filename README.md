@@ -44,14 +44,14 @@ This is the code repository, please visit the project page http://apkshellext.co
 |||
 | --- | --- |
 | [SharpShell](https://github.com/dwmkerr/sharpshell)                 | Shell extension library                        |
-| [SharpZip](https://github.com/icsharpcode/SharpZipLib)              | Zip function implementation in C#              |
+| .NET ZipArchive | .NET 10 built-in ZIP reader for APK/IPA/APPX archives |
 | [Iteedee.ApkReader](https://github.com/hylander0/Iteedee.ApkReader) | the original APK reader, not in use currently  |
 | [PlistCS](https://github.com/animetrics/PlistCS)                    | iOS plist file reader                          |
 | [PNGDecrush](https://github.com/MikeWeller/PNGDecrush)              | PNG decrush lib                                |
 | [Ionic.Zlib](https://github.com/jstedfast/Ionic.Zlib)               | Another Zip implementation, used by PNGDecrush |
 | [QRCoder](https://github.com/codebude/QRCoder)                      | QR code generator                              |
 | [Ultimate Social](https://www.iconfinder.com/iconsets/ultimate-social) | A free icon set for social medias           |
-| [SVG](https://github.com/vvvv/SVG)                                  | SVG format renderer                            |
+| [Svg.Skia](https://github.com/wieslawsoltes/Svg.Skia) | Skia-based SVG and Android vector rendering |
 | [WebP-Wrapper](https://github.com/JosePineiro/WebP-wrapper)         | WebP format renderer
 | [Thanasis Georgiou](https://github.com/sakisds)                     | Project web page |
 --------------

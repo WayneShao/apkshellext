@@ -17,7 +17,7 @@ Copy-Item "$repo\native\libwebp\libwebp_x64.dll","$repo\native\libwebp\libwebp_x
 New-Item -ItemType Directory "$dest\licenses\libwebp" -Force | Out-Null
 Copy-Item "$repo\native\libwebp\COPYING","$repo\native\libwebp\PATENTS","$repo\native\libwebp\README.md" "$dest\licenses\libwebp\"
 Copy-Item "$repo\LICENSE" $dest
-foreach ($notice in @('SharpShell\LICENSE.md','PNGDecrush\LICENSE','SharpZipLib\doc\COPYING.txt','SVG\license.txt','QRCoder\LICENSE.txt','WebP-wrapper\LICENSE')) {
+foreach ($notice in @('SharpShell\LICENSE.md','PNGDecrush\LICENSE','QRCoder\LICENSE.txt','WebP-wrapper\LICENSE')) {
     $component = $notice.Split('\')[0]
     New-Item -ItemType Directory "$dest\licenses\$component" -Force | Out-Null
     Copy-Item "$repo\ApkShellext2\$notice" "$dest\licenses\$component\"

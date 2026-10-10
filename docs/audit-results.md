@@ -16,7 +16,7 @@ Base: kkguo/apkshellext 79b9e4e54c2d04c8fdddcd458305c7796694aa27, branch ApkShel
 
 ## Final source verification
 
-Full Release build succeeds. Ten pre-existing compiler warnings remain in inherited drawing/resource code and third-party SVG source; no build errors.
+Full Release build succeeds. The component refresh removes the embedded SharpZipLib and SVG.NET production source. The remaining warnings are limited to inherited SharpShell/Plist and APK compatibility code; no build errors.
 
 -11 reader/update scenarios pass.
 -19 named parser scenarios pass (including map-layout combinations and42 malformed table mutations).
