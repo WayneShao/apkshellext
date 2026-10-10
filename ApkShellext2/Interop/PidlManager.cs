@@ -13,7 +13,7 @@ using SharpShell.Interop;
 namespace SharpShell.Pidl
 {
     /// <summary>
-    /// The PidlManager is a class that offers a set of functions for 
+    /// The PidlManager is a class that offers a set of functions for
     /// working with PIDLs.
     /// </summary>
     /// <remarks>

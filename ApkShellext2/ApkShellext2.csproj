@@ -17,6 +17,8 @@
     <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
     <NoWarn>SYSLIB0003;SYSLIB0051;SYSLIB0011;SYSLIB0014;CS0672;CS0618</NoWarn>
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <RollForward>LatestPatch</RollForward>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ApkChunk.cs" />
@@ -658,6 +660,5 @@
     <Content Include="..\native\libwebp\libwebp_x64.dll" Link="libwebp_x64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\native\libwebp\libwebp_x86.dll" Link="libwebp_x86.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="System.IO.Hashing" Version="10.0.12" />
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.12" />
   </ItemGroup>
 </Project>

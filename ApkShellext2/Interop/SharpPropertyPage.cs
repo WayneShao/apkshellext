@@ -9,7 +9,7 @@ using SharpShell.Diagnostics;
 namespace SharpShell.SharpPropertySheet
 {
     /// <summary>
-    /// The SharpPropertyPage class is the base class for Property Pages used in 
+    /// The SharpPropertyPage class is the base class for Property Pages used in
     /// Shell Property Sheet Extension servers.
     /// </summary>
     public class SharpPropertyPage : UserControl
@@ -145,9 +145,9 @@ namespace SharpShell.SharpPropertySheet
         private void InitializeComponent()
         {
             this.SuspendLayout();
-            // 
+            //
             // SharpPropertyPage
-            // 
+            //
             this.BackColor = System.Drawing.Color.Transparent;
             this.Name = "SharpPropertyPage";
             this.ResumeLayout(false);

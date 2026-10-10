@@ -100,7 +100,7 @@ namespace ApkShellext2 {
 
             renameMenu.Click += (sender, args) => renameWithVersion();
             mainMenu.DropDownItems.Add(renameMenu);
-            
+
             #endregion
 
             #region Dump menu
@@ -308,7 +308,7 @@ namespace ApkShellext2 {
             bool isipa = SelectedItemPaths.ElementAt(0).EndsWith(".ipa");
 
             try {
-                using (AppPackageReader reader = AppPackageReader.Read(path)) {                    
+                using (AppPackageReader reader = AppPackageReader.Read(path)) {
                     newFileName = ReplaceVariables(renamePattern,reader);
                 }
 
@@ -518,6 +518,3 @@ namespace ApkShellext2 {
         }
     }
 }
-
-
-

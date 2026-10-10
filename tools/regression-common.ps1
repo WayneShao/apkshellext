@@ -24,15 +24,28 @@ function Invoke-RegressionCase {
     param($Runner, [string[]]$Arguments = @(), [int]$TimeoutSeconds = 15)
     $Runner.Sequence++
     $log = Join-Path $Runner.Directory ('case-' + $Runner.Sequence)
-    $start = @{ FilePath=$Runner.Exe; PassThru=$true; WindowStyle='Hidden'; RedirectStandardOutput="$log.out"; RedirectStandardError="$log.err" }
-    if ($Arguments.Count) { $start.ArgumentList = ($Arguments | ForEach-Object { '"' + $_ + '"' }) }
-    $process = Start-Process @start
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $Runner.Exe
+    $start.Arguments = ($Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
     try {
+        [void]$process.Start()
+        # Drain both pipes asynchronously to avoid a full-buffer timeout/deadlock.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $finished = $process.WaitForExit($TimeoutSeconds * 1000)
         if (-not $finished) { $process.Kill(); $process.WaitForExit() }
-        $process.Refresh()
-        Get-Content "$log.out" | Out-Host
-        Get-Content "$log.err" | Out-Host
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $stdout | Set-Content "$log.out"
+        $stderr | Set-Content "$log.err"
+        $stdout | Out-Host
+        $stderr | Out-Host
         if (-not $finished) { Write-Host "FAIL $Arguments timeout ($TimeoutSeconds s)"; return $false }
         return $process.ExitCode -eq 0
     } finally { $process.Dispose() }

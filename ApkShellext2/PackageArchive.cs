@@ -6,6 +6,10 @@ namespace ApkShellext2 {
     // Readers own their input. A single close gate also protects COM-backed streams
     // when ZipFile itself closes a stream after a constructor failure.
     internal static class PackageArchive {
+        static PackageArchive() {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        }
+
         internal const int MetadataLimit = 16 * 1024 * 1024;
         internal const int ResourcesLimit = 128 * 1024 * 1024;
         internal const int NestedPackageLimit = 512 * 1024 * 1024;

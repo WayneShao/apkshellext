@@ -111,9 +111,9 @@ namespace ApkShellext2
         public Bitmap getImage(string name) {
             string fullname = name;
             ZipEntry image;
-            if (!name.EndsWith(".png")) {                
+            if (!name.EndsWith(".png")) {
                 fullname = name + @"@3x" + ".png";
-                image = zip.GetEntry(strAppRoot + fullname);                
+                image = zip.GetEntry(strAppRoot + fullname);
                 if (image == null) {
                     fullname = name + @"@2x" + ".png";
                     image = zip.GetEntry(strAppRoot + fullname);
@@ -284,4 +284,3 @@ namespace ApkShellext2
         }
     }
 }
-

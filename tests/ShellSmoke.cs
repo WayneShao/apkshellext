@@ -8,10 +8,13 @@ class ShellSmoke {
     struct Info { public IntPtr icon; public int index; public uint attributes; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string display; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=80)] public string type; }
     [DllImport("shell32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SHGetFileInfo(string path, uint attributes, ref Info info, uint size, uint flags);
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [STAThread]
     public static int Main(string[] args) {
         var dir = Path.Combine(Path.GetTempPath(), "ApkShellSmoke-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try {
+            if (Environment.Version.Major != 10) throw new Exception("Installed test must run on .NET 10");
+            Console.WriteLine("RUNTIME " + Environment.Version);
             for (int i=0;i<5;i++) {
                 string file = Path.Combine(dir, "download-"+i+".apk");
                 File.WriteAllBytes(file, new byte[0]);
@@ -26,6 +29,9 @@ class ShellSmoke {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies()) if (assembly.GetName().Name == "ApkShellext2") {
                 Console.WriteLine("Loaded "+assembly.FullName+" from "+assembly.Location);
                 if(args.Length>0 && assembly.GetName().Version.ToString()!=args[0]) throw new Exception("Unexpected installed version");
+                var framework = assembly.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>();
+                if (framework == null || framework.FrameworkName != ".NETCoreApp,Version=v10.0") throw new Exception("Installed handler is not .NET 10");
+                if (args.Length > 1 && !string.Equals(Path.GetFullPath(assembly.Location), Path.GetFullPath(args[1]), StringComparison.OrdinalIgnoreCase)) throw new Exception("Loaded handler is not from expected install path");
                 loaded = true;
             }
             if (!loaded) throw new Exception("Shell did not load the registered managed icon handler in this process");
