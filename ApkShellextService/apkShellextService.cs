@@ -49,12 +49,7 @@ namespace ApkShellext2 {
         protected override void OnStart(string[] args) {
             base.OnStart(args);
 
-            string[] prefixes = new string[] {
-                @"http://*:42728",
-                @"http://localhost:42728/",
-                @"http://"+LocalIPAddress()+@":42728/",
-                @"http://127.0.0.1:42728/"
-            };
+            string[] prefixes = WebServer.GetPrefixes(LocalIPAddress());
 
             ws = new WebServer(SendResponse, prefixes);
             ws.Run();
@@ -80,19 +75,58 @@ namespace ApkShellext2 {
             base.OnCustomCommand(command);
         }
 
-        Dictionary<string, string> pathList = new Dictionary<string,string>();
-        
+        private readonly PackageShareRegistry shares = new PackageShareRegistry();
+
         public string SendResponse(HttpListenerRequest request) {
-            if (request.QueryString["md5"] != null) {
-                if (!pathList.ContainsKey(request.QueryString["md5"])) {
-                    pathList.Add(request.QueryString["md5"], request.QueryString["path"]);
+            string key = request.QueryString["md5"];
+            if (key != null) {
+                shares.TryRegister(request.RemoteEndPoint == null ? null : request.RemoteEndPoint.Address,
+                    key, request.QueryString["path"]);
+                return "";
+            }
+            return shares.Lookup(request.Url.AbsolutePath.Trim('/'));
+        }
+    }
+
+    // Registration is local-only; download URLs remain reachable from a phone.
+    // Loopback is not user authentication: see README.md before enabling this legacy service.
+    internal sealed class PackageShareRegistry {
+        private readonly object sync = new object();
+        private readonly Dictionary<string, string> paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        internal static bool IsValidKey(string key) {
+            if (key == null || key.Length != 32) return false;
+            foreach (char c in key)
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+            return true;
+        }
+
+        internal bool TryRegister(IPAddress remote, string key, string path) {
+            if (remote == null || !IPAddress.IsLoopback(remote) || !IsValidKey(key) || string.IsNullOrWhiteSpace(path)) return false;
+            try {
+                if (!Path.IsPathRooted(path)) return false;
+                string fullPath = Path.GetFullPath(path);
+                string extension = Path.GetExtension(fullPath);
+                if (!string.Equals(extension, ".apk", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(extension, ".ipa", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(extension, ".appx", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(extension, ".appxbundle", StringComparison.OrdinalIgnoreCase)) return false;
+                if (!File.Exists(fullPath) || (File.GetAttributes(fullPath) & (FileAttributes.Directory | FileAttributes.Device | FileAttributes.ReparsePoint)) != 0) return false;
+                lock (sync) {
+                    if (!paths.ContainsKey(key)) paths.Add(key, fullPath);
                 }
-                return "";
-            } else {
-                string md5 = request.RawUrl.Replace(@"/", "");
-                if (pathList.ContainsKey(md5))
-                    return pathList[md5];
-                return "";
+                return true;
+            } catch (ArgumentException) { return false; }
+              catch (NotSupportedException) { return false; }
+              catch (IOException) { return false; }
+              catch (UnauthorizedAccessException) { return false; }
+        }
+
+        internal string Lookup(string key) {
+            if (!IsValidKey(key)) return "";
+            lock (sync) {
+                string path;
+                return paths.TryGetValue(key, out path) ? path : "";
             }
         }
     }
@@ -143,20 +177,18 @@ namespace ApkShellext2 {
                                 string rstr = _responderMethod(ctx.Request);
                                 if (rstr != "") {
                                     string filename = Path.GetFileName(rstr);
-                                    using (FileStream fs = new FileStream(rstr, FileMode.Open)) {
-                                        using (BinaryReader sr = new BinaryReader(fs)) {
-                                            byte[] buf = sr.ReadBytes((int)sr.BaseStream.Length);
-                                            ctx.Response.ContentType = "application/octet-stream";
-                                            ctx.Response.AddHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-                                            ctx.Response.ContentLength64 = buf.Length;
-                                            ctx.Response.OutputStream.Write(buf, 0, buf.Length);
-                                        }
+                                    using (FileStream fs = OpenPackageRead(rstr)) {
+                                        long length = fs.Length;
+                                        ctx.Response.ContentType = "application/octet-stream";
+                                        ctx.Response.AddHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+                                        ctx.Response.ContentLength64 = length;
+                                        CopyPackage(fs, ctx.Response.OutputStream, length);
                                     }
                                 }                         
                             }
                             catch (Exception ex){
-                                EventLog log = new EventLog();
-                                log.WriteEntry(ex.Message);
+                                try { EventLog.WriteEntry("ApkShellext Service", ex.Message, EventLogEntryType.Warning); }
+                                catch { } // Reporting a failed download must not escape the worker thread.
                             } // suppress any exceptions
                             finally
                             {
@@ -170,6 +202,26 @@ namespace ApkShellext2 {
             });
         }
  
+        internal static string[] GetPrefixes(string localAddress) {
+            return new[] { "http://*:42728/", "http://localhost:42728/",
+                "http://" + localAddress + ":42728/", "http://127.0.0.1:42728/" };
+        }
+
+        internal static FileStream OpenPackageRead(string path) {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        }
+
+        internal static void CopyPackage(Stream input, Stream output, long length) {
+            if (length < 0) throw new ArgumentOutOfRangeException("length");
+            byte[] buffer = new byte[64 * 1024];
+            while (length > 0) {
+                int count = input.Read(buffer, 0, (int)Math.Min(buffer.Length, length));
+                if (count == 0) throw new EndOfStreamException("Package changed during download.");
+                output.Write(buffer, 0, count);
+                length -= count;
+            }
+        }
+
         public void Stop()
         {
             _listener.Stop();

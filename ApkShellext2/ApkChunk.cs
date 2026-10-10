@@ -1081,7 +1081,8 @@ namespace ApkShellext2.ApkChunk
         /// <param name="bytes">stream read from apk zip</param>
         /// <returns>The top chunk, either a xml chunk or a resource table chunk</returns>
         public static ApkChunk ReadChunkFile(ref byte[] bytes) {
-            RES_TYPE chunktype = (RES_TYPE)(bytes[0] + bytes[1] << 8);
+            if (bytes == null || bytes.Length < 8) throw new InvalidDataException("Truncated chunk file header.");
+            RES_TYPE chunktype = (RES_TYPE)(bytes[0] | (bytes[1] << 8));
             switch (chunktype) {
                 case RES_TYPE.RES_XML_TYPE:
                     return new ApkXMLChunk(bytes);

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -60,9 +60,6 @@
     <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="Google.Protobuf, Version=3.8.0.0, Culture=neutral, PublicKeyToken=a7d26565bac4d604, processorArchitecture=MSIL">
-      <HintPath>..\packages\Google.Protobuf.3.8.0\lib\net45\Google.Protobuf.dll</HintPath>
-    </Reference>
     <Reference Include="Microsoft.VisualBasic" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
@@ -90,6 +87,9 @@
     <Compile Include="ApkContextMenu.cs" />
     <Compile Include="ApkThumbnailHandler.cs" />
     <Compile Include="AppPackageReader.cs" />
+    <Compile Include="PackageArchive.cs" />
+    <Compile Include="WebPImage.cs" />
+    <Compile Include="TypeOverlay.cs" />
     <Compile Include="AppxBundleReader.cs" />
     <Compile Include="AppxReader.cs" />
     <Compile Include="Ionic.Zlib\Ionic.Zlib\CRC32.cs" />
@@ -163,7 +163,7 @@
     <Compile Include="SharpShell\SharpShell\SharpShell\Extensions\GuidExtensions.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\Extensions\IDataObjectExtensions.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\Helpers\BitmapHelper.cs" />
-    <Compile Include="SharpShell\SharpShell\SharpShell\Helpers\ComStream.cs" />
+    <Compile Include="Interop\ComStream.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\Helpers\Win32Helper.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\InitializeWithStreamServer.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\Interop\ASSOCCLASS.cs" />
@@ -370,7 +370,7 @@
     </Compile>
     <Compile Include="SharpShell\SharpShell\SharpShell\SharpPropertySheet\SharpPropertySheet.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\SharpShellServer.cs" />
-    <Compile Include="SharpShell\SharpShell\SharpShell\SharpThumbnailHandler\SharpThumbnailHandler.cs" />
+    <Compile Include="Interop\SharpThumbnailHandler.cs" />
     <Compile Include="SharpShell\SharpShell\SharpShell\ShellExtInitServer.cs" />
     <Compile Include="SharpZipLib\src\Checksums\Adler32.cs" />
     <Compile Include="SharpZipLib\src\Checksums\CRC32.cs" />
@@ -738,7 +738,8 @@
     <PostBuildEvent>copy /Y $(ProjectDir)\Resources\install.bat  $(TargetDir)
 copy /Y $(ProjectDir)\Resources\restart_explorer.bat  $(TargetDir)
 copy /Y $(ProjectDir)\Resources\uninstall.bat  $(TargetDir)
-copy /Y $(ProjectDir)\WebP-wrapper\WebPTest\libwebp_*.dll $(TargetDir)
+copy /Y "$(ProjectDir)..\native\libwebp\libwebp_x64.dll" "$(TargetDir)"
+copy /Y "$(ProjectDir)..\native\libwebp\libwebp_x86.dll" "$(TargetDir)"
 if $(ConfigurationName) == Release (
 "C:\Program Files\7-Zip\7z.exe" a ApkShellext2.7z ApkShellext2.dll *.bat libwebp_*.dll
 "C:\Program Files\7-Zip\7z.exe" a ar-SA.7z ar-SA

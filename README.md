@@ -56,3 +56,7 @@ This is the code repository, please visit the project page http://apkshellext.co
 | [Thanasis Georgiou](https://github.com/sakisds)                     | Project web page |
 --------------
 Originally this project hosted on [GoogleCode](code.google.com/p/apkshellext), now moved to [:octocat:Github](https://github.com/kkguo/apkshellext) and fully re-writen with a native apk reader. The active developing code is on [ApkShellext2 branch](https://github.com/kkguo/apkshellext/tree/ApkShellext2). The obsolete code is on [master branch](https://github.com/kkguo/apkshellext/tree/master)
+
+## WayneShao maintenance fork
+
+Version 0.2.0.8 focuses on download-safe shared reads, deterministic cleanup and malformed-package resilience. See [release notes](docs/release-0.2.0.8.md), [audit plan](docs/reliability-plan.md), and `tools/` for reproducible Windows builds/tests. Upstream COM identities are retained. Do not install over an already loaded old assembly: unregister and preserve a rollback copy first.

@@ -46,7 +46,7 @@ namespace ApkShellext2
 
         public IpaReader(string path) {
             FileName = path;
-            openStream(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+            openStream(PackageArchive.OpenFile(path));
         }
 
         public IpaReader(Stream stream) {
@@ -54,7 +54,8 @@ namespace ApkShellext2
         }
 
         private void openStream(Stream stream) {
-            zip = new ZipFile(stream);
+            zip = PackageArchive.Open(stream, archive => {
+            zip = archive;
             ZipEntry infoPlist = null;
             foreach (ZipEntry en in zip) {
                 Match m = Regex.Match(en.Name, infoPlistPath);
@@ -69,10 +70,10 @@ namespace ApkShellext2
                 throw new EntryPointNotFoundException("cannot find info.plist");
             }
 
-            byte[] infoBytes = new byte[infoPlist.Size];
-            zip.GetInputStream(infoPlist).Read(infoBytes, 0, (int)infoPlist.Size);
+            byte[] infoBytes = PackageArchive.ReadEntry(zip, infoPlist.Name, PackageArchive.MetadataLimit);
 
             infoPlistDic = (Dictionary<string, object>)Plist.readPlist(infoBytes);
+            });
         }
 
         public string[] getStrings(Dictionary<string, object> dic, string[] keys) {
@@ -128,14 +129,17 @@ namespace ApkShellext2
             if (image == null) {
                 return null;
             }
-            byte[] imageBytes = new byte[image.Size];
-            zip.GetInputStream(image).Read(imageBytes, 0, (int)image.Size);
+            byte[] imageBytes = PackageArchive.ReadEntry(zip, image.Name, PackageArchive.ResourcesLimit);
             try {
-                MemoryStream imageOut = new MemoryStream();
-                PNGDecrusher.Decrush(new MemoryStream(imageBytes), imageOut);
-                return new Bitmap(imageOut);
+                using (var imageIn = new MemoryStream(imageBytes))
+                using (var imageOut = new MemoryStream()) {
+                    PNGDecrusher.Decrush(imageIn, imageOut);
+                    imageOut.Position = 0;
+                    using (var decoded = new Bitmap(imageOut)) return new Bitmap(decoded);
+                }
             } catch (InvalidDataException) { // image is not crushed
-                return new Bitmap(new MemoryStream(imageBytes));
+                using (var input = new MemoryStream(imageBytes))
+                using (var decoded = new Bitmap(input)) return new Bitmap(decoded);
             }
         }
 

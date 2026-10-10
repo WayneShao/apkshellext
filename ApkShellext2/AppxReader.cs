@@ -38,26 +38,21 @@ namespace ApkShellext2 {
 
         public AppxReader(Stream stream) {
             FileName = "";
-            zip = new ZipFile(stream);
-            Extract();
+            zip = PackageArchive.Open(stream, archive => { zip = archive; Extract(); });
         }
 
         public AppxReader(string path) {
             FileName = path;
-            zip = new ZipFile(FileName);
-            Extract();
+            zip = PackageArchive.Open(PackageArchive.OpenFile(path), archive => { zip = archive; Extract(); });
         }
 
         public void Extract() {
-            ZipEntry en = zip.GetEntry(AppxManifestXml);
-            if (en == null)
-                throw new EntryPointNotFoundException("cannot find " + AppxManifestXml);
-            byte[] xmlbytes = new byte[en.Size];
-            zip.GetInputStream(en).Read(xmlbytes, 0, (int)en.Size);
-
+            byte[] xmlbytes = PackageArchive.ReadEntry(zip, AppxManifestXml, PackageArchive.MetadataLimit);
             XmlDocument xml = new XmlDocument();
             xml.XmlResolver = null;
-            xml.Load(zip.GetInputStream(en));
+            using (var input = new MemoryStream(xmlbytes))
+            using (var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null }))
+                xml.Load(reader);
 
             XmlElement packageNode = xml.DocumentElement;
             XmlElement Identity = packageNode[elemIdentity];
@@ -74,7 +69,9 @@ namespace ApkShellext2 {
             XmlElement Logo = packageNode[elemProperties][elemLogo];
             iconPath = Logo.FirstChild.Value.ToString().Replace(@"\",@"/");
             XmlElement PhoneIdentity = packageNode[elemPhoneIdentity];
-            productid = PhoneIdentity.Attributes[attrPhoneProductID].Value.ToString();
+            if (PhoneIdentity == null)
+                PhoneIdentity = packageNode.SelectSingleNode("*[local-name()='PhoneIdentity']") as XmlElement;
+            productid = PhoneIdentity == null ? "" : PhoneIdentity.GetAttribute(attrPhoneProductID);
         }
 
         public override AppPackageReader.AppType Type {
@@ -123,7 +120,7 @@ namespace ApkShellext2 {
                 ZipEntry logo = null;
                 int scale = -1;
                 foreach (ZipEntry en in zip) {
-                    Match m = Regex.Match(en.Name, name + @"(\.scale\-(\d+))?" + @"\." + extension);
+                    Match m = Regex.Match(en.Name, "^" + Regex.Escape(name) + @"(\.scale\-(\d+))?" + @"\." + Regex.Escape(extension) + "$");
                     if (m.Success) {
                         if (m.Groups[1].Value == "") { // exactly matching, no scale
                             logo = en;
@@ -139,7 +136,8 @@ namespace ApkShellext2 {
                 if (logo != null) {
                     //byte[] imageBytes = new byte[logo.Size];
                     //zip.GetInputStream(logo).Read(imageBytes, 0, (int)logo.Size);
-                    return new Bitmap(zip.GetInputStream(logo));
+                    using (var input = new MemoryStream(PackageArchive.ReadEntry(zip, logo.Name, PackageArchive.ResourcesLimit)))
+                    using (var decoded = new Bitmap(input)) return new Bitmap(decoded);
                 } else {
                     throw new EntryPointNotFoundException("Cannot find Logo file: " + iconPath);
                 }

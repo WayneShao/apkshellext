@@ -32,31 +32,33 @@ namespace ApkShellext2 {
                 try {
                     using (AppPackageReader reader = AppPackageReader.Read(SelectedItemPath)) {
                         if (reader.Type == AppPackageReader.AppType.iOSApp && Utility.GetSetting("ShowIpaIcon", "True") != "True") {
-                            m_icon = Utility.AppTypeIcon(reader.Type);
+                            m_icon = (Bitmap)Utility.AppTypeIcon(reader.Type).Clone();
                         } else if ((reader.Type == AppPackageReader.AppType.WindowsPhoneApp ||
                             reader.Type == AppPackageReader.AppType.WindowsPhoneAppBundle) &&
                             Utility.GetSetting("ShowAppxIcon", "False") != "True") {
-                            m_icon = Utility.AppTypeIcon(reader.Type);
+                            m_icon = (Bitmap)Utility.AppTypeIcon(reader.Type).Clone();
                         } else {
                             m_icon = reader.getIcon(new Size((int)iconSize, (int)iconSize));
                         }
                         if (m_icon == null)
                             throw new Exception("Cannot find Icon for " + Path.GetFileName(SelectedItemPath) + ", draw default");
                     }
-                    if (Utility.GetSetting("ShowOverLayIcon") == "True")
-                        m_icon = Utility.CombineBitmap(m_icon,
-                           Utility.AppTypeIcon(AppPackageReader.getAppType(SelectedItemPath)),
-                           new Rectangle((int)(m_icon.Width * 0.05), 0, (int)(m_icon.Width * 0.95), (int)(m_icon.Height * 0.95)),
-                           new Rectangle(0, (int)m_icon.Height / 2, (int)m_icon.Width / 2, (int)m_icon.Height / 2),
-                           new Size((int)m_icon.Width, (int)m_icon.Height));
                 } catch (Exception ex) {
                     Log("Error in reading icon for " + Path.GetFileName(SelectedItemPath) + ", draw default : " + ex.Message);
                     // read error, draw the default icon
-                    m_icon = Utility.AppTypeIcon(AppPackageReader.getAppType(SelectedItemPath));
+                    if (m_icon != null) m_icon.Dispose();
+                    m_icon = (Bitmap)Utility.AppTypeIcon(AppPackageReader.getAppType(SelectedItemPath)).Clone();
                 }
             }
 
-            return Icon.FromHandle(Utility.ResizeBitmap(m_icon, new Size((int)iconSize, (int)iconSize)).GetHicon());
+            // SharpShell transfers the HICON to the shell; only dispose the bitmap here.
+            if (Utility.GetSetting("ShowOverLayIcon") == "True") {
+                using (var overlay = (Bitmap)Utility.AppTypeIcon(AppPackageReader.getAppType(SelectedItemPath)).Clone())
+                using (var composed = TypeOverlay.Compose(m_icon, overlay, new Size((int)iconSize, (int)iconSize)))
+                    return Icon.FromHandle(composed.GetHicon());
+            }
+            using (var resized = Utility.ResizeBitmap(m_icon, new Size((int)iconSize, (int)iconSize)))
+                return Icon.FromHandle(resized.GetHicon());
         }
 
         [CustomRegisterFunction]

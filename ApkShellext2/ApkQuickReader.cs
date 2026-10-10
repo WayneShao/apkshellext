@@ -12,7 +12,6 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Xml;
-using WebPWrapper;
 
 namespace ApkQuickReader
 {
@@ -1150,7 +1149,7 @@ namespace ApkQuickReader
         /// <param name="culture"></param>
         public ApkReader(string filename, string culture = "") {
             FileName = filename;
-            openStream(new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read));
+            openStream(new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         }
 
         public ApkReader(Stream stream, string culture = "") {
@@ -1159,14 +1158,74 @@ namespace ApkQuickReader
         }
 
         private void openStream(Stream stream) {
-            zip = new ZipFile(stream);
-            ZipEntry en = zip.GetEntry(AndroidManifestXML);
-            BinaryReader s = new BinaryReader(zip.GetInputStream(en));
-            manifest = s.ReadBytes((int)en.Size);
+            zip = PackageArchive.Open(stream, delegate(ZipFile archive) {
+                manifest = PackageArchive.ReadEntry(archive, AndroidManifestXML, PackageArchive.MetadataLimit);
+                resources = PackageArchive.ReadEntry(archive, Resources_arsc, PackageArchive.ResourcesLimit, false);
+            });
+        }
 
-            en = zip.GetEntry(Resources_arsc);
-            s = new BinaryReader(zip.GetInputStream(en));
-            resources = s.ReadBytes((int)en.Size);
+        // Validate chunk boundaries before any seek, allocation, or traversal. All arithmetic
+        // is widened so a corrupt unsigned size cannot wrap back into its parent.
+        private static void RequireRange(long offset, long count, long end) {
+            if (offset < 0 || count < 0 || offset > end || count > end - offset)
+                throw new InvalidDataException("Binary resource field exceeds its containing chunk.");
+        }
+
+        private static long ValidateChunk(byte[] bytes, long start, long end, int depth) {
+            RequireRange(start, 8, end);
+            int pos = checked((int)start);
+            ushort type = BitConverter.ToUInt16(bytes, pos);
+            int header = BitConverter.ToUInt16(bytes, pos + 2);
+            long size = BitConverter.ToUInt32(bytes, pos + 4);
+            if (header < 8 || size < header || depth > 32)
+                throw new InvalidDataException("Invalid binary resource chunk header.");
+            RequireRange(start, size, end);
+            long limit = start + size;
+            if (type == (ushort)RES_TYPE.RES_XML_TYPE || type == (ushort)RES_TYPE.RES_TABLE_TYPE || type == (ushort)RES_TYPE.RES_TABLE_PACKAGE_TYPE) {
+                if (type == (ushort)RES_TYPE.RES_TABLE_TYPE && header < 12)
+                    throw new InvalidDataException("Truncated resource table header.");
+                if (type == (ushort)RES_TYPE.RES_TABLE_PACKAGE_TYPE && header < 284)
+                    throw new InvalidDataException("Truncated package header.");
+                long child = start + header;
+                while (child < limit) child = ValidateChunk(bytes, child, limit, depth + 1);
+            } else if (type == (ushort)RES_TYPE.RES_STRING_POOL_TYPE) {
+                if (header < 28) throw new InvalidDataException("Truncated string pool.");
+                uint count = BitConverter.ToUInt32(bytes, pos + 8);
+                uint styles = BitConverter.ToUInt32(bytes, pos + 12);
+                long strings = BitConverter.ToUInt32(bytes, pos + 20);
+                RequireRange(start + header, ((long)count + styles) * 4, limit);
+                if (strings < header + ((long)count + styles) * 4 || strings > size)
+                    throw new InvalidDataException("Invalid string pool data offset.");
+            } else if (type == (ushort)RES_TYPE.RES_XML_START_ELEMENT_TYPE) {
+                RequireRange(start + header, 20, limit);
+                int ext = checked(pos + header);
+                int attrStart = BitConverter.ToUInt16(bytes, ext + 8);
+                int attrSize = BitConverter.ToUInt16(bytes, ext + 10);
+                int count = BitConverter.ToUInt16(bytes, ext + 12);
+                if (attrStart < 20 || attrSize < 20) throw new InvalidDataException("Invalid XML attributes.");
+                RequireRange(start + header + attrStart, (long)attrSize * count, limit);
+            } else if (type == (ushort)RES_TYPE.RES_XML_START_NAMESPACE_TYPE || type == (ushort)RES_TYPE.RES_XML_END_NAMESPACE_TYPE || type == (ushort)RES_TYPE.RES_XML_END_ELEMENT_TYPE) {
+                RequireRange(start + header, 8, limit);
+            } else if (type == (ushort)RES_TYPE.RES_XML_CDATA_TYPE) {
+                RequireRange(start + header, 12, limit);
+            } else if (type == (ushort)RES_TYPE.RES_XML_RESOURCE_MAP_TYPE && (size - header) % 4 != 0) {
+                throw new InvalidDataException("Invalid resource map length.");
+            }
+            return limit;
+        }
+
+        // The buffers are privately owned snapshots. Weak keys avoid retaining drawable
+        // documents while keeping repeated string lookups linear in document size.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<byte[], object> validatedDocuments =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<byte[], object>();
+        private static void ValidateDocument(byte[] bytes, RES_TYPE expected) {
+            if (bytes == null || bytes.Length < 8 || BitConverter.ToUInt16(bytes, 0) != (ushort)expected)
+                throw new InvalidDataException("Invalid binary resource document.");
+            validatedDocuments.GetValue(bytes, delegate(byte[] document) {
+                if (ValidateChunk(document, 0, document.Length, 0) != document.Length)
+                    throw new InvalidDataException("Invalid binary resource document length.");
+                return new object();
+            });
         }
 
         public override AppPackageReader.AppType Type {
@@ -1250,18 +1309,27 @@ namespace ApkQuickReader
         /// </summary>
         /// <param name="path">png or xml file within apk zip</param>
         /// <returns>Bitmap or </returns>
+        private readonly HashSet<string> imageStack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public Bitmap getImage(string path, Size size) {
+            if (imageStack.Count >= 32 || !imageStack.Add(path))
+                throw new InvalidDataException("Drawable reference cycle or depth exceeded.");
+            try { return ReadImage(path, size); }
+            finally { imageStack.Remove(path); }
+        }
+
+        private Bitmap ReadImage(string path, Size size) {
             ZipEntry iconz;
-            if (zip.FindEntry(path, true) > 0) {
+            if (zip.FindEntry(path, true) >= 0) {
                 iconz = zip.GetEntry(path);
                 if (path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || 
                     path.EndsWith(".gif") || path.EndsWith(".tif") || path.EndsWith(".tiff")) {
-                    return Utility.ResizeBitmap((Bitmap)Image.FromStream(zip.GetInputStream(iconz)),size);
+                    using (Stream input = zip.GetInputStream(iconz))
+                    using (Bitmap bitmap = (Bitmap)Image.FromStream(input))
+                        return Utility.ResizeBitmap(bitmap, size);
                 } else if (path.EndsWith(".webp")) {
-                    WebP webp = new WebP();
-                    byte[] bytes = new BinaryReader(zip.GetInputStream(iconz)).ReadBytes((int)iconz.Size);
-                    //webp.Decode(bytes).Save(FileName+".webp");
-                    return Utility.ResizeBitmap(webp.Decode(bytes),size);
+                    byte[] bytes = PackageArchive.ReadEntry(zip, path, PackageArchive.ResourcesLimit);
+                    using (Bitmap bitmap = WebPImage.Decode(bytes))
+                        return Utility.ResizeBitmap(bitmap, size);
                 } else if (path.EndsWith(".xml")) {
                     XmlDocument doc = ExtractCompressedXml(path);
                     if (doc.FirstChild.Name == "adaptive-icon") {
@@ -1281,34 +1349,24 @@ namespace ApkQuickReader
         }
 
         private Bitmap parseLayerDrawable(XmlNode node, Size size) {
+            Bitmap result = new Bitmap(size.Width, size.Height);
             try {
-                XmlNodeList nl = node.SelectNodes("/layer-list/item");
-                List<Bitmap> bitmapList = new List<Bitmap>(nl.Count);
-                foreach (XmlElement e in nl) {
-                    if (e.HasAttribute("drawable")) {
-                        Bitmap b = getImage(e.GetAttribute("drawable"), size);
-                        bitmapList.Add(b);
-                    } else {
-                        XmlElement shape = (XmlElement)e.SelectSingleNode("shape");
-                        if (shape != null) {
-                            bitmapList.Add(parseShape(shape, size));
-                        } else {
-                            throw new Exception("unrecorgnized element in layer-list.");
+                using (Graphics graphics = Graphics.FromImage(result)) {
+                    foreach (XmlElement item in node.SelectNodes("/layer-list/item")) {
+                        XmlElement shape = (XmlElement)item.SelectSingleNode("shape");
+                        using (Bitmap layer = item.HasAttribute("drawable") ? getImage(item.GetAttribute("drawable"), size) :
+                            (shape != null ? parseShape(shape, size) : null)) {
+                            if (layer == null) throw new InvalidDataException("Unrecognized layer drawable.");
+                            graphics.DrawImage(layer, new Rectangle(Point.Empty, size));
                         }
                     }
                 }
-                Bitmap bmp = new Bitmap(size.Width, size.Height);
-                Graphics g = Graphics.FromImage(bmp);
-                foreach (Bitmap b in bitmapList) {
-                    g.DrawImage(Utility.ResizeBitmap(b, new Size(bmp.Width, bmp.Height)), 0, 0);
-                }
-                return bmp;
-            } catch (Exception ex) {
-                throw new Exception(ex.Message + "\nError happens during parsing layer-list: " + node.InnerXml);
-            }
+                return result;
+            } catch { result.Dispose(); throw; }
         }
 
         private Bitmap parseVectorDrawable(XmlNode node, Size size) {
+            Bitmap b = null;
             try {
                 XmlElement vector = (XmlElement)node.SelectSingleNode("/vector");
                 float viewportWidth = 0, viewportHeight = 0;
@@ -1356,15 +1414,16 @@ namespace ApkQuickReader
                     }
                     //Not finished yet
                 }
-                Bitmap b = new Bitmap((int)viewportWidth, (int)viewportHeight);
+                b = new Bitmap((int)viewportWidth, (int)viewportHeight);
                 using (Graphics g = Graphics.FromImage(b)) {
                     XmlElement group = (XmlElement)vector.SelectSingleNode("group");
                     XmlNodeList nl = (group != null) ? group.SelectNodes("path") :
                                                       vector.SelectNodes("path");
                     foreach (XmlElement elem in nl) {
                         string pathdata = elem.GetAttribute("pathData");
-                        GraphicsPath gpath = VectorDrawableRender.Convert2Path(pathdata);
+                        using (GraphicsPath gpath = VectorDrawableRender.Convert2Path(pathdata)) {
                         Brush fill = null;
+                        try {
                         if (elem.HasAttribute("fillColor")) {
                             string fillcolor = elem.GetAttribute("fillColor");
                             if (fillcolor.EndsWith(".xml")) {//gradien
@@ -1376,53 +1435,34 @@ namespace ApkQuickReader
                             fill = new SolidBrush(System.Drawing.Color.Black);
                         }
                         g.FillPath(fill, gpath);
+                        } finally { if (fill != null) fill.Dispose(); }
+                        }
                         //g.DrawPath(new Pen(fill, 2), path);                    
                     }
                 }
                 return Utility.ResizeBitmap(b,size);
             } catch (Exception ex) {
                 throw new Exception(ex.Message + "\nError happens during parsing vectordrawable: " + node.InnerXml);
-            }
+            } finally { if (b != null) b.Dispose(); }
         }
         
         private Bitmap parseAdaptiveIcon(XmlNode node, Size size) {
-            /// Get adaptive - icon
-            /// 
-            /*
-            <?xml version="1.0" encoding="utf-8"?>
-            <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-            <background android:drawable="@drawable/ic_launcher_background" />
-            <foreground android:drawable="@drawable/ic_launcher_foreground" />
-            </adaptive-icon>
-            */
+            Bitmap result = new Bitmap(size.Width, size.Height);
             try {
-                XmlElement elem = (XmlElement)node.SelectSingleNode("/adaptive-icon/background");
-                Bitmap b = null, f = null;
-                Bitmap bmp = new Bitmap(size.Width, size.Height);
-                Graphics g = Graphics.FromImage(bmp);
-                if (elem.HasAttribute("drawable")) {
-                    b = getImage(elem.GetAttribute("drawable"), size);
-                    if (b != null)
-                        g.DrawImage(b, 0, 0);
-                    else {
-                        Color c = stringToColor(elem.GetAttribute("drawable"));
-                        g.FillRectangle(new SolidBrush(c), 0, 0, bmp.Width, bmp.Height);
+                using (Graphics graphics = Graphics.FromImage(result)) {
+                    foreach (string name in new[] { "background", "foreground" }) {
+                        XmlElement element = (XmlElement)node.SelectSingleNode("/adaptive-icon/" + name);
+                        if (element == null || !element.HasAttribute("drawable")) continue;
+                        string value = element.GetAttribute("drawable");
+                        using (Bitmap layer = getImage(value, size)) {
+                            if (layer != null) graphics.DrawImage(layer, 0, 0);
+                            else using (Brush fill = new SolidBrush(stringToColor(value)))
+                                graphics.FillRectangle(fill, 0, 0, result.Width, result.Height);
+                        }
                     }
                 }
-                elem = (XmlElement)node.SelectSingleNode("/adaptive-icon/foreground");
-                if (elem.HasAttribute("drawable")) {
-                    f = getImage(elem.GetAttribute("drawable"), size);
-                    if (f != null)
-                        g.DrawImage(f, 0, 0);
-                    else {
-                        Color c = stringToColor(elem.GetAttribute("drawable"));
-                        g.FillRectangle(new SolidBrush(c), 0, 0, bmp.Width, bmp.Height);
-                    }
-                }
-                return bmp;
-            } catch (Exception ex) {
-                throw new Exception(ex.Message + "\nError happening during parse AdaptiveIcon.");
-            }
+                return result;
+            } catch { result.Dispose(); throw; }
         }
 
         private Brush parseGradient(XmlNode node) {
@@ -1475,8 +1515,11 @@ namespace ApkQuickReader
         }
 
         private Bitmap parseShape(XmlNode shapeNode, Size size) {
+            Bitmap b = null;
+            Graphics g = null;
+            GraphicsPath p = null;
+            Brush brush = null;
             try {
-                Bitmap b;
                 XmlElement eShape;
                 if (shapeNode.NodeType == XmlNodeType.Document)
                     eShape = ((XmlDocument)shapeNode).DocumentElement;
@@ -1489,9 +1532,8 @@ namespace ApkQuickReader
                 else {
                     b = new Bitmap(size.Width, size.Height);
                 }
-                Graphics g = Graphics.FromImage(b);
-                GraphicsPath p = new GraphicsPath();
-                Brush brush;
+                g = Graphics.FromImage(b);
+                p = new GraphicsPath();
                 XmlElement ebrush = (XmlElement)eShape.SelectSingleNode("solid");
                 if (ebrush != null) {
                     brush = new SolidBrush(stringToColor(ebrush.GetAttribute("color")));
@@ -1521,6 +1563,11 @@ namespace ApkQuickReader
                 return Utility.ResizeBitmap(b, size);
             } catch (Exception ex) {
                 throw new Exception(ex.Message + "\nError happending during parsing shape:" + shapeNode.InnerXml);
+            } finally {
+                if (brush != null) brush.Dispose();
+                if (p != null) p.Dispose();
+                if (g != null) g.Dispose();
+                if (b != null) b.Dispose();
             }
         }
 
@@ -1552,11 +1599,12 @@ namespace ApkQuickReader
         /// <param name="sub"></param>
         /// <returns></returns>
         private string QuickSearchCompressedXml(byte[] xml, string xpath, string attribute) {
+            ValidateDocument(xml, RES_TYPE.RES_XML_TYPE);
             using (MemoryStream ms = new MemoryStream(xml))
             using (BinaryReader br = new BinaryReader(ms)) {
                 Log("Search xml for " + xpath + " " + attribute);
                 string[] pathl = xpath.Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                ms.Seek(8, SeekOrigin.Begin); // skip header, no doubt it's an xml chunk
+                ms.Seek(BitConverter.ToUInt16(xml, 2), SeekOrigin.Begin); // validated root header
                 ApkResource result = new ApkResource(0);
                 int tagDepth = 0;
                 int matchDepth = 0;
@@ -1565,20 +1613,20 @@ namespace ApkQuickReader
                 while (ms.Position < ms.Length) {
                     long chunkPos = ms.Position;
                     RES_TYPE chunkType = (RES_TYPE)br.ReadInt16();
-                    short headerSize = br.ReadInt16();
+                    int headerSize = br.ReadUInt16();
                     int chunkSize = br.ReadInt32();
                     if (chunkType == RES_TYPE.RES_XML_START_ELEMENT_TYPE) {
                         tagDepth++;
 
-                        ms.Seek(8 + 4, SeekOrigin.Current); // skip line number & comment / namespace
+                        ms.Seek(chunkPos + headerSize + 4, SeekOrigin.Begin); // skip namespace
                         string tag_s = QuickSearchCompressedXmlStringPoolAndResMap(xml, br.ReadUInt32());
                         if (tagDepth <= pathl.Length && tag_s.ToUpper() == pathl[tagDepth - 1].ToUpper()) {
                             matchDepth++;
 
                             if (matchDepth == pathl.Length) { // match, read attributes
-                                int attributeStart = br.ReadInt16();
-                                int attributeSize = br.ReadInt16();
-                                int attributeCount = br.ReadInt16();
+                                int attributeStart = br.ReadUInt16();
+                                int attributeSize = br.ReadUInt16();
+                                int attributeCount = br.ReadUInt16();
                                 for (int i = 0; i < attributeCount; i++) {
                                     int offset = headerSize + attributeStart + attributeSize * i + 4;
                                     if (offset >= chunkSize) { // Error: comes to out of chunk
@@ -1611,7 +1659,7 @@ namespace ApkQuickReader
         public XmlDocument ExtractCompressedXml(string path) {
             try {
                 ZipEntry en = zip.GetEntry(path);
-                byte[] bytes = new BinaryReader(zip.GetInputStream(en)).ReadBytes((int)en.Size);
+                byte[] bytes = PackageArchive.ReadEntry(zip, path, PackageArchive.MetadataLimit);
                 return ExtractCompressedXml(bytes);
             } catch (Exception ex) {
                 throw new Exception(ex.Message + "\nError happens during dump " + path);
@@ -1619,11 +1667,12 @@ namespace ApkQuickReader
         }
 
         private XmlDocument ExtractCompressedXml(byte[] bytes) {
+            ValidateDocument(bytes, RES_TYPE.RES_XML_TYPE);
             using (MemoryStream ms = new MemoryStream(bytes))
             using (BinaryReader br = new BinaryReader(ms)) {
                 long chunkPos = ms.Position;
                 RES_TYPE chunkType = (RES_TYPE)br.ReadInt16();
-                short headerSize = br.ReadInt16();
+                int headerSize = br.ReadUInt16();
                 int chunkSize = br.ReadInt32();
                 ms.Seek(chunkPos + headerSize, SeekOrigin.Begin);
 
@@ -1636,7 +1685,7 @@ namespace ApkQuickReader
                     while (ms.Position < ms.Length) {
                         chunkPos = ms.Position;
                         chunkType = (RES_TYPE)br.ReadInt16();
-                        headerSize = br.ReadInt16();
+                        headerSize = br.ReadUInt16();
                         chunkSize = br.ReadInt32();
                         ms.Seek(chunkPos + headerSize, SeekOrigin.Begin);
                         if (chunkType == RES_TYPE.RES_XML_START_NAMESPACE_TYPE) {                            
@@ -1644,7 +1693,7 @@ namespace ApkQuickReader
                             string uri = QuickSearchStringPool(bytes, br.ReadUInt32());
                             nm.AddNamespace(prefix, uri);
                         } else if (chunkType == RES_TYPE.RES_XML_CDATA_TYPE) {
-                            string cdatastr = QuickSearchStringPool(bytes, br.ReadUInt16());
+                            string cdatastr = QuickSearchStringPool(bytes, br.ReadUInt32());
                             XmlCDataSection cdata = doc.CreateCDataSection(cdatastr);
                             currentNode.AppendChild(cdata);
                         } else if (chunkType == RES_TYPE.RES_XML_START_ELEMENT_TYPE) {
@@ -1654,9 +1703,9 @@ namespace ApkQuickReader
                             currentNode.AppendChild(currentElem);
                             currentNode = currentElem;
 
-                            int attributeStart = br.ReadInt16();
-                            int attributeSize = br.ReadInt16();
-                            int attributeCount = br.ReadInt16();
+                            int attributeStart = br.ReadUInt16();
+                            int attributeSize = br.ReadUInt16();
+                            int attributeCount = br.ReadUInt16();
                             for (int i = 0; i < attributeCount; i++) {
                                 int offset = headerSize + attributeStart + attributeSize * i + 4;
                                 ms.Seek(chunkPos + offset, SeekOrigin.Begin);
@@ -1697,7 +1746,7 @@ namespace ApkQuickReader
                         return "(0x" + data.ToString("X8")+")";
                     }
                 case DATA_TYPE.TYPE_INT_BOOLEAN:
-                    return (data == 0) ? ConstTrue : ConstFalse;
+                    return (data != 0) ? ConstTrue : ConstFalse;
                 case DATA_TYPE.TYPE_DIMENSION:
                     COMPLEX_TYPE t = (COMPLEX_TYPE)(data & 0xff);
                     string unit = (t == COMPLEX_TYPE.COMPLEX_UNIT_DIP) ? "dp" :
@@ -1732,83 +1781,68 @@ namespace ApkQuickReader
         }
 
         private string QuickSearchStringPool(byte[] bytes, uint id) {
-            if (id == 0xffffffff) return "";
-            using (MemoryStream ms = new MemoryStream(bytes))
-            using (BinaryReader br = new BinaryReader(ms)) {
-                RES_TYPE chunkType = (RES_TYPE)br.ReadInt16();
-                short headerSize = br.ReadInt16();
-                ms.Seek(headerSize, SeekOrigin.Begin);
-
-                while (ms.Position < ms.Length) {
-                    long chunkPos = ms.Position;
-                    chunkType = (RES_TYPE)br.ReadInt16();
-                    headerSize = br.ReadInt16();
-                    int chunkSize = br.ReadInt32();
-                    if (chunkType == RES_TYPE.RES_STRING_POOL_TYPE) {
-                        int stringcount = br.ReadInt32();
-                        int stylecount = br.ReadInt32();
-                        int flags = br.ReadInt32();
-                        bool isUTF_8 = (flags & (1 << 8)) != 0;
-                        int stringStart = br.ReadInt32();
-                        ms.Seek(4 + id*4, SeekOrigin.Current);
-                        int stringPos = br.ReadInt32();
-                        ms.Seek(chunkPos + stringStart + stringPos, SeekOrigin.Begin);
-                        if (isUTF_8) {
-                            int u16len = br.ReadByte(); // u16len
-                            if ((u16len & 0x80) != 0) {// larger than 128
-                                u16len = ((u16len & 0x7F) << 8) + br.ReadByte();
-                            }
-
-                            int u8len = br.ReadByte(); // u8len
-                            if ((u8len & 0x80) != 0) {// larger than 128
-                                u8len = ((u8len & 0x7F) << 8) + br.ReadByte();
-                            }
-                            return Encoding.UTF8.GetString(br.ReadBytes(u8len));
-                        } else // UTF_16
-                        {
-                            int u16len = br.ReadUInt16();
-                            if ((u16len & 0x8000) != 0) {// larger than 32768
-                                u16len = ((u16len & 0x7FFF) << 16) + br.ReadUInt16();
-                            }
-
-                            return Encoding.Unicode.GetString(br.ReadBytes(u16len * 2));
-                        }
-                    } else {
-                        ms.Seek(chunkPos + chunkSize, SeekOrigin.Begin);
+            if (id == UInt32.MaxValue) return "";
+            ValidateDocument(bytes, (RES_TYPE)BitConverter.ToUInt16(bytes, 0));
+            using (var ms = new MemoryStream(bytes))
+            using (var br = new BinaryReader(ms)) {
+                long pos = BitConverter.ToUInt16(bytes, 2);
+                while (pos < bytes.Length) {
+                    int p = (int)pos;
+                    int header = BitConverter.ToUInt16(bytes, p + 2);
+                    long end = pos + BitConverter.ToUInt32(bytes, p + 4);
+                    if (BitConverter.ToUInt16(bytes, p) == (ushort)RES_TYPE.RES_STRING_POOL_TYPE) {
+                        uint count = BitConverter.ToUInt32(bytes, p + 8);
+                        if (id >= count) throw new InvalidDataException("String index exceeds pool.");
+                        bool utf8 = (BitConverter.ToUInt32(bytes, p + 16) & 256) != 0;
+                        long strings = pos + BitConverter.ToUInt32(bytes, p + 20);
+                        uint styleStart = BitConverter.ToUInt32(bytes, p + 24);
+                        if (styleStart != 0) { RequireRange(pos + styleStart, 0, end); end = pos + styleStart; }
+                        long offset = BitConverter.ToUInt32(bytes, checked(p + header + (int)(id * 4)));
+                        RequireRange(strings + offset, 1, end);
+                        ms.Position = strings + offset;
+                        int length = ReadStringLength(br, utf8, end);
+                        if (utf8) length = ReadStringLength(br, true, end);
+                        long byteCount = utf8 ? length : (long)length * 2;
+                        RequireRange(ms.Position, byteCount + (utf8 ? 1 : 2), end);
+                        byte[] value = br.ReadBytes(checked((int)byteCount));
+                        if (utf8 ? br.ReadByte() != 0 : br.ReadUInt16() != 0)
+                            throw new InvalidDataException("String is not terminated.");
+                        return (utf8 ? Encoding.UTF8 : Encoding.Unicode).GetString(value);
                     }
+                    pos = end;
                 }
                 return "";
             }
         }
 
-        private string QuickSearchCompressedXMlResMap(byte[] xml, uint id) {
-            if (id == 0xffffffff) return "";
-            using (MemoryStream ms = new MemoryStream(xml))
-            using (BinaryReader br = new BinaryReader(ms)) {
-                RES_TYPE chunkType = (RES_TYPE)br.ReadInt16();
-                short headerSize = br.ReadInt16();
-                ms.Seek(headerSize, SeekOrigin.Begin);
-
-                while (ms.Position < ms.Length) {
-                    long chunkPos = ms.Position;
-                    chunkType = (RES_TYPE)br.ReadInt16();
-                    headerSize = br.ReadInt16();
-                    int chunkSize = br.ReadInt32();
-
-                    if (chunkType == RES_TYPE.RES_XML_RESOURCE_MAP_TYPE) {
-                        //Resource map
-                        ms.Seek(id * 4, SeekOrigin.Current);
-                        string result = Enum.GetName(typeof(R_attr), br.ReadUInt32());
-                        if (result != null)
-                            return result;
-                        else
-                            return "";
-                    } else {
-                        ms.Seek(chunkPos + chunkSize, SeekOrigin.Begin);
-                    }
-                }
-                return "";
+        private static int ReadStringLength(BinaryReader br, bool utf8, long end) {
+            RequireRange(br.BaseStream.Position, utf8 ? 1 : 2, end);
+            int value = utf8 ? br.ReadByte() : br.ReadUInt16();
+            int flag = utf8 ? 0x80 : 0x8000;
+            if ((value & flag) != 0) {
+                RequireRange(br.BaseStream.Position, utf8 ? 1 : 2, end);
+                value = ((value & (flag - 1)) << (utf8 ? 8 : 16)) | (utf8 ? br.ReadByte() : br.ReadUInt16());
             }
+            return value;
+        }
+
+        private string QuickSearchCompressedXMlResMap(byte[] xml, uint id) {
+            if (id == UInt32.MaxValue) return "";
+            ValidateDocument(xml, RES_TYPE.RES_XML_TYPE);
+            long pos = BitConverter.ToUInt16(xml, 2);
+            while (pos < xml.Length) {
+                int p = (int)pos;
+                int header = BitConverter.ToUInt16(xml, p + 2);
+                long end = pos + BitConverter.ToUInt32(xml, p + 4);
+                if (BitConverter.ToUInt16(xml, p) == (ushort)RES_TYPE.RES_XML_RESOURCE_MAP_TYPE) {
+                    long offset = pos + header + (long)id * 4;
+                    // XML resource maps may legitimately be shorter than the string pool.
+                    if (offset + 4 > end) return "";
+                    return Enum.GetName(typeof(R_attr), BitConverter.ToUInt32(xml, (int)offset)) ?? "";
+                }
+                pos = end;
+            }
+            return "";
         }
 
         /// <summary>
@@ -1851,101 +1885,118 @@ namespace ApkQuickReader
         /// </summary>
         /// <param name="id">resourceID</param>
         /// <returns>the resource, in string format, if resource id not found, return null value</returns>
+        // AOSP ResTable_type uses three entry-map encodings. Sparse offsets are
+        // uint16 values in units of four bytes; unlike offset16, 0xffff is not a sentinel.
+        private static uint FindResourceEntry(byte[] bytes, int chunk, int header, long end,
+            uint count, uint entriesStart, uint entryID) {
+            byte mapFlags = bytes[chunk + 9];
+            if ((mapFlags & ~3) != 0 || mapFlags == 3)
+                throw new InvalidDataException("Unsupported resource entry-map flags.");
+            if (count > 65536) throw new InvalidDataException("Resource entry count exceeds ID space.");
+            int width = mapFlags == 2 ? 2 : 4;
+            RequireRange((long)chunk + header, (long)count * width, end);
+            if (entriesStart < header + (long)count * width || (entriesStart & 3) != 0)
+                throw new InvalidDataException("Invalid entry data offset.");
+            RequireRange((long)chunk + entriesStart, 0, end);
+            if (mapFlags == 1) {
+                uint found = UInt32.MaxValue;
+                int previous = -1;
+                for (uint i = 0; i < count; i++) {
+                    int map = checked(chunk + header + (int)i * 4);
+                    int index = BitConverter.ToUInt16(bytes, map);
+                    if (index <= previous) throw new InvalidDataException("Sparse resource indices are not ordered.");
+                    previous = index;
+                    uint offset = (uint)BitConverter.ToUInt16(bytes, map + 2) * 4;
+                    RequireRange((long)chunk + entriesStart + offset, 8, end);
+                    if (index == entryID) found = offset;
+                }
+                return found;
+            }
+            if (entryID >= count) return UInt32.MaxValue;
+            int address = checked(chunk + header + (int)entryID * width);
+            if (mapFlags == 2) {
+                ushort offset = BitConverter.ToUInt16(bytes, address);
+                return offset == UInt16.MaxValue ? UInt32.MaxValue : (uint)offset * 4;
+            }
+            return BitConverter.ToUInt32(bytes, address);
+        }
+
         private ApkResource QuickSearchResource(UInt32 id) {
+            var result = new ApkResource(id);
+            if (resources == null || searchstack.Contains(id)) return result;
+            if (searchstack.Count >= 32) throw new InvalidDataException("Resource reference depth exceeded.");
             searchstack.Push(id);
-            ApkResource res = new ApkResource(id);
-
-            using (MemoryStream ms = new MemoryStream(resources))
-            using (BinaryReader br = new BinaryReader(ms)) {
-                ms.Seek(8, SeekOrigin.Begin); // jump type/headersize/chunksize
-                int packageCount = br.ReadInt32();
-                // comes to stringpool chunk, skipit
-                long stringPoolPos = ms.Position;
-                ms.Seek(4, SeekOrigin.Current);
-                int stringPoolSize = br.ReadInt32();
-                ms.Seek(stringPoolSize - 8, SeekOrigin.Current); // jump to the end
-
-                //Package chunk now
-                for (int pack = 0; pack < packageCount; pack++) {
-                    long PackChunkPos = ms.Position;
-                    ms.Seek(2, SeekOrigin.Current); // jump type/headersize
-                    int headerSize = br.ReadInt16();
-                    int PackChunkSize = br.ReadInt32();
-                    int packID = br.ReadInt32();
-
-                    if (packID != res.PackageID) { // check if the resource is in this pack
-                                                   // goto next chunk
-                        ms.Seek(PackChunkPos + PackChunkSize, SeekOrigin.Begin);
-                        continue;
-                    } else {
-                        //ms.Seek(128*2, SeekOrigin.Current); // skip name
-                        //int typeStringsPos = br.ReadInt32();
-                        //ms.Seek(4,SeekOrigin.Current);    // skip lastpublictype
-                        //int keyStringsPos = br.ReadInt32();
-                        //ms.Seek(4, SeekOrigin.Current);  // skip lastpublickey
-                        ms.Seek(PackChunkPos + headerSize, SeekOrigin.Begin);
-
-                        // skip typestring chunk
-                        ms.Seek(4, SeekOrigin.Current);
-                        ms.Seek(br.ReadInt32() - 8, SeekOrigin.Current); // jump to the end
-                                                                         // skip keystring chunk
-                        ms.Seek(4, SeekOrigin.Current);
-                        ms.Seek(br.ReadInt32() - 8, SeekOrigin.Current); // jump to the end
-
-                        // come to typespec chunks and type chunks
-                        // typespec and type chunks may happen in a row.
-                        do {
-                            long chunkPos = ms.Position;
-                            short chunkType = br.ReadInt16();
-                            headerSize = br.ReadInt16();
-                            int chunkSize = br.ReadInt32();
-                            byte typeid;
-
-                            if (chunkType == (short)RES_TYPE.RES_TABLE_TYPE_TYPE) {
-                                typeid = br.ReadByte();
-                                if (typeid == res.TypeID) {
-                                    ms.Seek(3, SeekOrigin.Current); // skip 0
-                                    int entryCount = br.ReadInt32();
-                                    int entryStart = br.ReadInt32();
-
-                                    // read the config section
-                                    int config_size = br.ReadInt32();
-                                    byte[] conf = br.ReadBytes(config_size - 4);
-
-                                    ms.Seek(chunkPos + headerSize + res.EntryID * 4, SeekOrigin.Begin);
-                                    //ms.Seek(EntryID * 4, SeekOrigin.Current); // goto index
-                                    uint entryIndic = br.ReadUInt32();
-                                    if (entryIndic == 0xffffffff) {
-                                        ms.Seek(chunkPos + chunkSize, SeekOrigin.Begin);
-                                        continue; //no entry here, go to next chunk
-                                    }
-                                    ms.Seek(chunkPos + entryStart + entryIndic, SeekOrigin.Begin);
-
-                                    // get to the entry
-                                    ms.Seek(11, SeekOrigin.Current); // skip entry size, flags, key, size, 0
-                                    byte dataType = br.ReadByte();
-                                    uint data = br.ReadUInt32();
-                                    if (dataType == (byte)DATA_TYPE.TYPE_STRING) {
-                                        res.Add(conf, QuickSearchStringPool(resources, data));
-                                    } else if (dataType == (byte)DATA_TYPE.TYPE_REFERENCE) {
-                                        // the entry is null, or it's referencing in loop, go to next chunk
-                                        if (data == 0x00000000 || searchstack.Contains(data)) {
-                                            ms.Seek(chunkPos + chunkSize, SeekOrigin.Begin);
-                                            continue;
+            try {
+                ValidateDocument(resources, RES_TYPE.RES_TABLE_TYPE);
+                using (var ms = new MemoryStream(resources))
+                using (var br = new BinaryReader(ms)) {
+                    long package = BitConverter.ToUInt16(resources, 2);
+                    while (package < resources.Length) {
+                        int p = (int)package;
+                        int header = BitConverter.ToUInt16(resources, p + 2);
+                        long packageEnd = package + BitConverter.ToUInt32(resources, p + 4);
+                        if (BitConverter.ToUInt16(resources, p) == (ushort)RES_TYPE.RES_TABLE_PACKAGE_TYPE && BitConverter.ToUInt32(resources, p + 8) == result.PackageID) {
+                            uint typeIdOffset = header >= 288 ? BitConverter.ToUInt32(resources, p + 284) : 0;
+                            if (typeIdOffset > 255) throw new InvalidDataException("Invalid package type ID offset.");
+                            long pos = package + header;
+                            while (pos < packageEnd) {
+                                p = (int)pos;
+                                header = BitConverter.ToUInt16(resources, p + 2);
+                                long end = pos + BitConverter.ToUInt32(resources, p + 4);
+                                if (BitConverter.ToUInt16(resources, p) == (ushort)RES_TYPE.RES_TABLE_TYPE_TYPE) {
+                                    RequireRange(pos, 24, end);
+                                    if (resources[p + 8] == 0 || resources[p + 8] + typeIdOffset > 255)
+                                        throw new InvalidDataException("Invalid resource type ID.");
+                                    if (resources[p + 8] + typeIdOffset == result.TypeID) {
+                                        uint count = BitConverter.ToUInt32(resources, p + 12);
+                                        uint entries = BitConverter.ToUInt32(resources, p + 16);
+                                        uint configSize = BitConverter.ToUInt32(resources, p + 20);
+                                        if (header < 24 || configSize < 4) throw new InvalidDataException("Invalid resource type header.");
+                                        RequireRange(pos + 20, configSize, pos + header);
+                                        uint index = FindResourceEntry(resources, p, header, end, count, entries, result.EntryID);
+                                        if (index != UInt32.MaxValue) {
+                                            if ((index & 3) != 0) throw new InvalidDataException("Unaligned resource entry.");
+                                            long entry = pos + entries + index;
+                                            RequireRange(entry, 8, end);
+                                            ushort flags = BitConverter.ToUInt16(resources, (int)entry + 2);
+                                            bool compact = (flags & 8) != 0;
+                                            if (compact && (flags & 1) != 0) throw new InvalidDataException("Compact resource entry cannot be complex.");
+                                            int entrySize = compact ? 8 : BitConverter.ToUInt16(resources, (int)entry);
+                                            if (entrySize < 8) throw new InvalidDataException("Invalid resource entry.");
+                                            RequireRange(entry, entrySize, end);
+                                            if ((flags & 1) == 0) {
+                                                ms.Position = pos + 24;
+                                                byte[] conf = br.ReadBytes(checked((int)configSize - 4));
+                                                DATA_TYPE type;
+                                                uint value;
+                                                if (compact) {
+                                                    type = (DATA_TYPE)(flags >> 8);
+                                                    value = BitConverter.ToUInt32(resources, (int)entry + 4);
+                                                } else {
+                                                    RequireRange(entry + entrySize, 8, end);
+                                                    ms.Position = entry + entrySize;
+                                                    ushort valueSize = br.ReadUInt16();
+                                                    if (valueSize < 8) throw new InvalidDataException("Invalid resource value.");
+                                                    RequireRange(entry + entrySize, valueSize, end);
+                                                    br.ReadByte();
+                                                    type = (DATA_TYPE)br.ReadByte();
+                                                    value = br.ReadUInt32();
+                                                }
+                                                if (type == DATA_TYPE.TYPE_REFERENCE) { if (value != 0) result.Add(QuickSearchResource(value)); }
+                                                else if (type == DATA_TYPE.TYPE_STRING) result.Add(conf, QuickSearchStringPool(resources, value));
+                                                else result.Add(conf, convertData(resources, type, value));
+                                            }
                                         }
-                                        res.Add(QuickSearchResource((UInt32)data));
-                                    } else { // I would like to expect we only will recieve TYPE_STRING/TYPE_REFERENCE/any integer type, complex is not considering here,yet
-                                        res.Add(conf, data.ToString());
                                     }
                                 }
+                                pos = end;
                             }
-                            ms.Seek(chunkPos + chunkSize, SeekOrigin.Begin); // skip this chunk
-                        } while (ms.Position < PackChunkPos + PackChunkSize);
+                        }
+                        package = packageEnd;
                     }
                 }
-                searchstack.Pop();
-                return res;
-            }
+                return result;
+            } finally { searchstack.Pop(); }
         }
 
         private int applyFilter(ApkResource r) {
@@ -1958,6 +2009,7 @@ namespace ApkQuickReader
                         if (r.values[i].ToString().EndsWith(".xml")) break;
                     }
                     byte[] bytes = r.configs[i];
+                    if (bytes.Length <= (int)ResourceConfig.Density + 1) continue;
                     int density = bytes[(int)ResourceConfig.Density + 1] * 256 + bytes[(int)ResourceConfig.Density];
                     if (density > bestDensity) {
                         bestDensity = density;

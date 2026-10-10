@@ -35,37 +35,29 @@ namespace ApkShellext2 {
 
         public AppxBundleReader(string path) {
             FileName = path;
-            openFile(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+            openFile(PackageArchive.OpenFile(path));
         }
 
         private void openFile(Stream stream) {
-            string appxFileName = "";
-            zip = new ZipFile(stream);
-            ZipEntry en = zip.GetEntry(AppxBundleManifestXml);
-            if (en == null)
-                throw new EntryPointNotFoundException("cannot find " + AppxBundleManifestXml);
-
-            using (XmlReader reader = XmlReader.Create(zip.GetInputStream(en))) {
-                reader.ReadToFollowing(ElemIdentity);
-                reader.MoveToAttribute(AttrName);
-
-                do {
-                    reader.ReadToFollowing(ElemPackage);
-                    reader.MoveToAttribute(AttrType);
-                } while (reader.Value != ValApplication || reader.EOF);
-
-                if (reader.EOF)
-                    throw new Exception("Cannot find application in " + AppxBundleManifestXml);
-
-                reader.MoveToAttribute(AttrFileName);
-                appxFileName = reader.Value;
-            }
-
-            en = zip.GetEntry(appxFileName);
-            if (en == null)
-                throw new EntryPointNotFoundException("cannot find appx " + appxFileName);
-
-            appxReader = new AppxReader(zip.GetInputStream(en));
+            zip = PackageArchive.Open(stream, archive => {
+                zip = archive;
+                string appxFileName = null;
+                var manifest = PackageArchive.ReadEntry(zip, AppxBundleManifestXml, PackageArchive.MetadataLimit);
+                using (var input = new MemoryStream(manifest))
+                using (var reader = XmlReader.Create(input, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null })) {
+                    while (reader.Read()) {
+                        if (reader.NodeType == XmlNodeType.Element && reader.LocalName == ElemPackage && reader.GetAttribute(AttrType) == ValApplication) {
+                            appxFileName = reader.GetAttribute(AttrFileName);
+                            break;
+                        }
+                    }
+                }
+                if (string.IsNullOrEmpty(appxFileName))
+                    throw new InvalidDataException("Cannot find application filename in " + AppxBundleManifestXml);
+                // A deflated entry stream is not seekable. ZipFile requires seeking.
+                var package = PackageArchive.ReadEntry(zip, appxFileName, PackageArchive.NestedPackageLimit);
+                appxReader = new AppxReader(new MemoryStream(package, false));
+            });
         }
 
         public override AppPackageReader.AppType Type {

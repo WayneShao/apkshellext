@@ -230,5 +230,7 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 /.vs
+/artifacts/
+/native/libwebp/*.lib
 /ApkShellext2/Properties/apkshellext/mv.bat
 /ApkShellext2/Properties/apkshellext

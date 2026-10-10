@@ -223,56 +223,58 @@ namespace ApkShellext2 {
             return Path.GetDirectoryName(codebase);
         }
 
+        internal static bool IsUpdateDue(string lastCheck, DateTime today) {
+            DateTime previous;
+            return !DateTime.TryParse(lastCheck, CultureInfo.InvariantCulture, DateTimeStyles.None, out previous) || previous.Date < today.Date;
+        }
+
         public static void CheckUpdate() {
+            bool acquired = false;
             try {
-                checkUpdateMutex.WaitOne();
-                DateTime t = DateTime.Parse(Utility.GetSetting("LastCheckUpdateTime", "0"));
-                if (t < System.DateTime.Today) {
-                    Utility.SaveSetting("LastCheckUpdateTime", System.DateTime.Today.ToString());
-                    Thread thUpdate = new Thread(new ThreadStart(() => { Utility.getLatestVersion(); }));
-                    thUpdate.Start();
+                // Never wait for another host while constructing a shell menu.
+                try { acquired = checkUpdateMutex.WaitOne(0); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired) return;
+                if (IsUpdateDue(Utility.GetSetting("LastCheckUpdateTime", ""), DateTime.Today)) {
+                    Utility.SaveSetting("LastCheckUpdateTime", DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                    var worker = new Thread(getLatestVersion) { IsBackground = true };
+                    worker.Start();
                 }
-            } catch { } finally {
-                checkUpdateMutex.ReleaseMutex();
+            } catch (Exception ex) {
+                Log(null, "Update", ex.Message);
+            } finally {
+                if (acquired) checkUpdateMutex.ReleaseMutex();
             }
         }
 
         public static void getLatestVersion() {
             try {
-                byte[] buf = new byte[1024];
-                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(Properties.NonLocalizeResources.urlGithubHomeLatest);
-                // execute the request
-                HttpWebResponse response = (HttpWebResponse)
-                    request.GetResponse();
-                // we will read data via the response stream
-                Stream resStream = response.GetResponseStream();
-                int count = resStream.Read(buf, 0, buf.Length);
-                string s = "";
-                if (count != 0) {
-                    s = Encoding.ASCII.GetString(buf, 0, count);
+                var request = (HttpWebRequest)WebRequest.Create(Properties.NonLocalizeResources.urlGithubHomeLatest);
+                request.Timeout = 5000;
+                request.ReadWriteTimeout = 5000;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var stream = response.GetResponseStream())
+                using (var reader = new StreamReader(stream, Encoding.UTF8)) {
+                    var buffer = new char[129];
+                    int count = 0, read;
+                    while (count < buffer.Length && (read = reader.Read(buffer, count, buffer.Length - count)) > 0) count += read;
+                    if (count == buffer.Length) return;
+                    string text = new string(buffer, 0, count).Trim();
+                    Version version;
+                    if (Version.TryParse(text, out version)) Utility.SaveSetting("LatestVersion", version.ToString());
                 }
-                s = Regex.Replace(s, @"\t|\n|\r", "");
-                Utility.SaveSetting("LatestVersion", s);
-                Log(null, "Update", "Get the latest version :" + s);
             } catch (Exception ex) {
-                Log(null, "Update", "Error During check update:" + ex.Message);
+                Log(null, "Update", "Error during update check: " + ex.Message);
             }
         }
 
+        internal static bool IsNewerVersion(string text, Version current) {
+            Version latest;
+            return Version.TryParse(text, out latest) && latest > current;
+        }
+
         public static bool NewVersionAvailible() {
-            string[] latestV = Utility.GetSetting("LatestVersion").Split(new Char[] { '.' });
-            if (latestV.Length != 4)
-                return false;
-            string[] curV = Assembly.GetExecutingAssembly().GetName().Version.ToString().Split(new Char[] { '.' });
-            // version number should be always 4 parts
-            for (int i = 0; i < latestV.Length; i++) {
-                if (latestV[i] != curV[i]) {
-                    if (float.Parse(latestV[i]) > float.Parse(curV[i]))
-                        return true;
-                    break;
-                }
-            }
-            return false;
+            return IsNewerVersion(Utility.GetSetting("LatestVersion"), Assembly.GetExecutingAssembly().GetName().Version);
         }
 
         // http://stackoverflow.com/questions/6803073/get-local-ip-address

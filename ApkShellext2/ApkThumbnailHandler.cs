@@ -28,6 +28,7 @@ namespace ApkShellext2 {
             //    return null;
             //}
             if (Utility.GetSetting("EnableThumbnail") != "True") {
+                if (SelectedItemStream != null) SelectedItemStream.Dispose();
                 return null;
             }
 
@@ -46,29 +47,32 @@ namespace ApkShellext2 {
                     outputSize = m_icon.Height;
 
                 Log("Got icon, resizing...");
-                //if (Settings.Default.ShowOverLayIcon) {
-                if (Utility.GetSetting("ShowOverlayIcon")=="True") {
-                    Log("Draw overlay");
-                    m_icon = Utility.CombineBitmap(m_icon,
-                           Utility.AppTypeIcon(AppPackageReader.AppType.AndroidApp),
-                           new Rectangle(0, 0, outputSize , outputSize),
-                           new Rectangle(0, (int)outputSize / 2, (int)outputSize / 2, (int)outputSize / 2),
-                           new Size(outputSize, outputSize));
-                } else {
-                    m_icon = Utility.ResizeBitmap(m_icon, outputSize);
+                using (var original = m_icon) {
+                    m_icon = null;
+                    if (Utility.GetSetting("ShowOverLayIcon") == "True") {
+                        using (var overlay = (Bitmap)Utility.AppTypeIcon(AppPackageReader.AppType.AndroidApp).Clone())
+                            m_icon = TypeOverlay.Compose(original, overlay, new Size(outputSize, outputSize));
+                    } else {
+                        m_icon = Utility.ResizeBitmap(original, outputSize);
+                    }
                 }
 #if DEBUG
                 string p = Path.GetTempFileName();
                 m_icon.Save(p);
                 Log("Save m_icon to " + p);
 #endif
-                return m_icon;
+                var result = m_icon;
+                m_icon = null; // transfer bitmap ownership to SharpShell
+                return result;
             } catch (Exception ex){
                 Log("Error in reading icon from stream, draw default");
                 Log(ex.Message);
                 // read error, draw the default icon
                 //m_icon = Utility.AppTypeIcon(AppPackageReader.AppType.AndroidApp);
                 return null;
+            } finally {
+                if (m_icon != null) m_icon.Dispose();
+                if (SelectedItemStream != null) SelectedItemStream.Dispose();
             }
         }
 
