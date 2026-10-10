@@ -1121,6 +1121,7 @@ namespace ApkQuickReader
 
     public class ApkReader : AppPackageReader
     {
+        static ApkReader() { Encoding.RegisterProvider(CodePagesEncodingProvider.Instance); }
         private ZipFile zip;
         private byte[] resources;
         private byte[] manifest;

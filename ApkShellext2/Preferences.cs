@@ -197,7 +197,7 @@ namespace ApkShellext2 {
         }
 
         private void btnUpdate_Click(object sender, EventArgs e) {
-            System.Diagnostics.Process.Start(string.Format(NonLocalizeResources.urlGithubHomeWithVersion, Assembly.GetExecutingAssembly().GetName().Version.ToString()));
+            BrowserLauncher.OpenUrl(string.Format(NonLocalizeResources.urlGithubHomeWithVersion, Assembly.GetExecutingAssembly().GetName().Version.ToString()));
         }
 
         private void ckShowMenuIcon_CheckedChanged(object sender, EventArgs e) {
@@ -293,15 +293,15 @@ namespace ApkShellext2 {
         }
 
         private void llbPatternVariables_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            System.Diagnostics.Process.Start(NonLocalizeResources.urlPatternVarWiki);
+            BrowserLauncher.OpenUrl(NonLocalizeResources.urlPatternVarWiki);
         }
 
         private void btnUpdate_Click_1(object sender, EventArgs e) {
-            System.Diagnostics.Process.Start(string.Format(Properties.NonLocalizeResources.urlGithubHomeWithVersion,Assembly.GetExecutingAssembly().GetName().Version.ToString()));
+            BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlGithubHomeWithVersion,Assembly.GetExecutingAssembly().GetName().Version.ToString()));
         }
 
         private void llbInfoTipPattVar_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            System.Diagnostics.Process.Start(NonLocalizeResources.urlPatternVarWiki);
+            BrowserLauncher.OpenUrl(NonLocalizeResources.urlPatternVarWiki);
         }
 
         private void ckStretchIcon_CheckedChanged(object sender, EventArgs e) {
@@ -310,7 +310,7 @@ namespace ApkShellext2 {
         }
 
         private void lblHelpTranslate_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e) {
-            System.Diagnostics.Process.Start(NonLocalizeResources.urlTranslate);
+            BrowserLauncher.OpenUrl(NonLocalizeResources.urlTranslate);
         }
 
         private void ckEnableThumbnail_CheckedChanged(object sender, EventArgs e) {
@@ -357,7 +357,7 @@ namespace ApkShellext2 {
         }
 
         private void BtnPatreon_Click(object sender, EventArgs e) {
-            System.Diagnostics.Process.Start(Properties.NonLocalizeResources.urlPatreon);
+            BrowserLauncher.OpenUrl(Properties.NonLocalizeResources.urlPatreon);
         }
 
         private void Preferences_ResizeBegin(object sender, EventArgs e) {

@@ -1,8 +1,7 @@
-param([string]$AssemblyPath = "$PSScriptRoot\..\ApkShellext2\bin\Release\ApkShellext2.dll")
+param([string]$AssemblyPath = "$PSScriptRoot\..\artifacts\build\win-x64\ApkShellext2.dll", [int]$TimeoutSeconds = 15)
 $ErrorActionPreference = 'Stop'
-$assembly = (Resolve-Path $AssemblyPath).Path
-$exe = Join-Path (Split-Path $assembly) 'ThumbnailRegression.exe'
-& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /out:$exe /r:$assembly /r:System.Drawing.dll "$PSScriptRoot\..\tests\ThumbnailRegression.cs"
-if ($LASTEXITCODE -ne 0) { throw 'Thumbnail integration test compilation failed' }
-& $exe
-if ($LASTEXITCODE -ne 0) { throw 'Thumbnail integration regression failed' }
+. "$PSScriptRoot\regression-common.ps1"
+$runner = New-RegressionRunner -Suite 'ThumbnailRegression' -AssemblyPath $AssemblyPath
+$arguments = @()
+
+if (-not (Invoke-RegressionCase $runner -Arguments $arguments -TimeoutSeconds $TimeoutSeconds)) { throw 'ThumbnailRegression regression failed' }

@@ -1,4 +1,4 @@
-﻿using ApkQuickReader;
+using ApkQuickReader;
 using ApkShellext2.Properties;
 using Microsoft.Win32;
 using QRCoder;
@@ -24,6 +24,7 @@ using System.Xml;
 using Microsoft.VisualBasic;
 
 namespace ApkShellext2 {
+    internal static class BrowserLauncher { internal static void OpenUrl(string url) { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } }
     [Guid("dcb629fc-f86f-456f-8e24-98b9b2643a9b")]
     [ComVisible(true)]
     [ClassInterface(ClassInterfaceType.None)]
@@ -431,7 +432,7 @@ namespace ApkShellext2 {
             foreach (var p in SelectedItemPaths) {
                 using (ApkReader reader = new ApkReader(p)) {
                     string package = reader.PackageName;
-                    Process.Start(string.Format(Properties.NonLocalizeResources.urlGooglePlay, package));
+                    BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlGooglePlay, package));
                 }
             }
         }
@@ -440,7 +441,7 @@ namespace ApkShellext2 {
             foreach (var p in SelectedItemPaths) {
                 using (ApkReader reader = new ApkReader(p)) {
                     string package = reader.PackageName;
-                    Process.Start(string.Format(Properties.NonLocalizeResources.urlAmazonAppStore, package));
+                    BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlAmazonAppStore, package));
                 }
             }
         }
@@ -449,7 +450,7 @@ namespace ApkShellext2 {
             foreach (var p in SelectedItemPaths) {
                 using (ApkReader reader = new ApkReader(p)) {
                     string package = reader.PackageName;
-                    Process.Start(string.Format(Properties.NonLocalizeResources.urlApkMirror, reader.Publisher, package));
+                    BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlApkMirror, reader.Publisher, package));
                 }
             }
         }
@@ -459,7 +460,7 @@ namespace ApkShellext2 {
                 if (p.EndsWith(AppPackageReader.extIPA)) {
                     using (IpaReader reader = AppPackageReader.Read(p) as IpaReader) {
                         try {
-                            Process.Start(string.Format(Properties.NonLocalizeResources.urlAppleStore, reader.AppID));
+                            BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlAppleStore, reader.AppID));
                         } catch (Exception ex) {
                             Log(Path.GetFileName(p) + ex.Message + Environment.NewLine + "Cannot get appid.");
                         }
@@ -474,7 +475,7 @@ namespace ApkShellext2 {
                     using (AppPackageReader reader = AppPackageReader.Read(p)) {
                         string package = reader.PackageName;
                         CultureInfo ci = System.Threading.Thread.CurrentThread.CurrentCulture;
-                        Process.Start(string.Format(Properties.NonLocalizeResources.urlMicrosoftStore,reader.AppID));
+                        BrowserLauncher.OpenUrl(string.Format(Properties.NonLocalizeResources.urlMicrosoftStore,reader.AppID));
                     }
                 }
             }
@@ -517,3 +518,6 @@ namespace ApkShellext2 {
         }
     }
 }
+
+
+

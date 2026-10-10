@@ -1,4 +1,4 @@
-﻿using PlistCS;
+using PlistCS;
 using PNGDecrush;
 using SharpShell.Attributes;
 using SharpShell.Extensions;
@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 using ICSharpCode.SharpZipLib.Zip;
 using Microsoft.Win32;
 using System.Text.RegularExpressions;
-using Ionic.Zlib;
+
 
 namespace ApkShellext2
 {
@@ -284,3 +284,4 @@ namespace ApkShellext2
         }
     }
 }
+

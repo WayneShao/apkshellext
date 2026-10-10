@@ -219,8 +219,7 @@ namespace ApkShellext2 {
         }
 
         public static string getInstallPath() {
-            string codebase = new Uri(Assembly.GetExecutingAssembly().EscapedCodeBase).LocalPath;
-            return Path.GetDirectoryName(codebase);
+            return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         }
 
         internal static bool IsUpdateDue(string lastCheck, DateTime today) {

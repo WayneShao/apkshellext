@@ -1,18 +1,15 @@
-param([string]$AssemblyPath = "$PSScriptRoot\..\ApkShellext2\bin\Release\ApkShellext2.dll", [int]$TimeoutSeconds=5, [string[]]$ApkFixtures=@())
-$ErrorActionPreference='Stop'
-$assembly=(Resolve-Path $AssemblyPath).Path
-$dir=Split-Path $assembly
-$exe=Join-Path $dir 'ParserRegression.exe'
-& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /out:$exe /r:$assembly /r:System.Drawing.dll /r:System.IO.Compression.dll "$PSScriptRoot\..\tests\ParserRegression.cs"
-if($LASTEXITCODE -ne 0){ throw 'Test compilation failed' }
-$fail=0
-foreach($case in @('boolean','xml','manifest','strings','resmap','fixture','sharing','ownership','bounds','cycle','resource_failure','staged_download','legacy_type','modern_dense','modern_sparse','modern_offset16','modern_type_offset','modern_errors','modern_sparse_max')) {
- $p=Start-Process -FilePath $exe -ArgumentList $case -PassThru -NoNewWindow
- if(-not $p.WaitForExit($TimeoutSeconds*1000)){ $p.Kill(); $p.WaitForExit(); Write-Host "FAIL $case timeout"; $fail++ }
- elseif($p.ExitCode -ne 0){$fail++}
+param([string]$AssemblyPath = "$PSScriptRoot\..\artifacts\build\win-x64\ApkShellext2.dll", [int]$TimeoutSeconds = 5, [string[]]$ApkFixtures = @())
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\regression-common.ps1"
+$runner = New-RegressionRunner -Suite 'ParserRegression' -AssemblyPath $AssemblyPath
+$cases = @('boolean', 'xml', 'manifest', 'strings', 'resmap', 'fixture', 'sharing', 'ownership', 'bounds', 'cycle', 'resource_failure', 'staged_download', 'legacy_type', 'modern_dense', 'modern_sparse', 'modern_offset16', 'modern_type_offset', 'modern_errors', 'modern_sparse_max')
+$failed = 0
+foreach ($case in $cases) {
+    if (-not (Invoke-RegressionCase $runner -Arguments @($case) -TimeoutSeconds $TimeoutSeconds)) { $failed++ }
 }
-foreach($apk in $ApkFixtures) {
- $p=Start-Process -FilePath $exe -ArgumentList @('real', ('"'+$apk+'"')) -PassThru -NoNewWindow
- if(-not $p.WaitForExit($TimeoutSeconds*1000)){$p.Kill();$p.WaitForExit();$fail++;Write-Host "FAIL real timeout $apk"} elseif($p.ExitCode -ne 0){$fail++}
+foreach ($apk in $ApkFixtures) {
+    if (-not (Invoke-RegressionCase $runner -Arguments @('real', (Resolve-Path -LiteralPath $apk).Path) -TimeoutSeconds $TimeoutSeconds)) { $failed++ }
 }
-if($fail){throw "$fail parser regressions failed"}
+$total = $cases.Count + $ApkFixtures.Count
+Write-Host "ParserRegression regressions: $($total - $failed)/$total passed"
+if ($failed) { throw "$failed regressions failed; logs: $($runner.Directory)" }
