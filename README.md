@@ -60,3 +60,5 @@ Originally this project hosted on [GoogleCode](code.google.com/p/apkshellext), n
 ## WayneShao maintenance fork
 
 Version 0.2.0.8 focuses on download-safe shared reads, deterministic cleanup and malformed-package resilience. See [release notes](docs/release-0.2.0.8.md), [audit plan](docs/reliability-plan.md), and `tools/` for reproducible Windows builds/tests. Upstream COM identities are retained. Do not install over an already loaded old assembly: unregister and preserve a rollback copy first.
+
+Upgrade note: if existing files still show old corner badges after replacing the DLL, run `tools/refresh-thumbnails.ps1 -Path <folder>` to re-extract that folder's supported package thumbnails without changing the files. A packaged copy is attached separately to the release.

@@ -47,3 +47,15 @@ These changes address demonstrated reliability failures; they are not a comprehe
 The optional legacy HTTP service has separate source fixes and tests but is not shipped, enabled or installed by this release. Loopback registration is not a complete multi-user authorization mechanism. See ApkShellextService/README.md.
 
 Raster formats other than WebP still rely on the operating system image decoder and do not have an equivalent decoded-pixel cap. This audit is bounded, not a promise of complete handling of every crafted image.
+
+## Refresh existing thumbnail caches
+
+Windows may keep thumbnails produced by the old extension even after registration and an Explorer restart. If the corner badge still looks large/opaque, extract the separate `ApkShellext2-thumbnail-refresh.zip` asset and run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\refresh-thumbnails.ps1 -Path "D:\YourDownloads"
+```
+
+The helper requests fresh thumbnails through Windows IThumbnailCache, at the common cache sizes, for supported package files directly in the chosen folder. It updates cached images and notifies Explorer without modifying the APK/IPA/APPX contents or deleting the system-wide cache.
+
+Installed verification on Windows x64 loaded version 0.2.0.8 through the registered Shell icon interface; five empty-final-APK icon/write/rename/delete cycles passed without forced garbage collection. A cached-before/forced-extraction comparison also confirmed the old large badge was a retained Windows thumbnail. Nine APK thumbnails in the affected folder were refreshed successfully.
