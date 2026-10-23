@@ -12,9 +12,17 @@ From the repository root, the reproducible build command is:
 ./native/shellbridge/test.ps1
 ```
 
-The script invokes `zig c++ -target x86_64-windows-gnu -std=c++17 -O2 -shared native/shellbridge/bridge.cpp -o OUTPUT -lole32 -luuid -lshell32 -luser32 -lgdi32`. Do not add `-static`: Zig 0.15.2 combines that flag with `-shared` by emitting an archive rather than a loadable PE DLL. The script checks the result's MZ signature. The inspected DLL imports Windows system/UCRT libraries, with no separate libstdc++, libgcc, CoreCLR, or .NET host DLL dependency.
+The script invokes `zig c++ -target x86_64-windows-gnu -std=c++17 -O2 -shared native/shellbridge/bridge.cpp -o OUTPUT -lole32 -luuid -lshell32 -luser32 -lgdi32 -lbcrypt`. Do not add `-static`: Zig 0.15.2 combines that flag with `-shared` by emitting an archive rather than a loadable PE DLL. The script checks the result's MZ signature. The inspected DLL imports Windows system/UCRT libraries (including BCrypt for SHA-256), with no separate libstdc++, libgcc, CoreCLR, or .NET host DLL dependency.
 
 The native menu uses `安装包操作与设置…` under `APK Shell 扩展` when the user's primary UI language is Chinese; other UI languages use the English labels.
+
+## Icon cache identity
+
+`GetIconLocation` returns an ASCII token containing a SHA-256 digest of the canonical UTF-16 full path, file size, last-write time, change time, volume serial, and file ID. Both ANSI and Unicode interfaces return the same token without lossy ANSI path conversion. File metadata is refreshed for each location request through a short-lived attribute-only handle sharing read/write/delete; there is no global cache or retained source handle.
+
+`GIL_NOTFILENAME | GIL_PERINSTANCE` tells the Shell to ask this handler for image extraction. Those flags alone do not make an empty location unique: returning empty location/index zero for every APK previously made unrelated APKs alias in the Shell image cache. Normal stable files now remain cacheable with distinct identities. Files shorter than an empty ZIP record, missing/unreadable metadata, hash failures, or insufficient output buffer space use `GIL_DONTCACHE`; a truncated identity is never cached. A rewritten file invalidates its identity through metadata changes. These are metadata identities, not hashes of complete APK contents.
+
+`GIL_DEFAULTICON` returns `S_FALSE` so the Shell supplies its fallback icon. `GIL_ASYNC` does not return `E_PENDING`, because that would claim the COM object supports concurrent free-threaded calls. See Microsoft's [GetIconLocation contract](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-iextracticona-geticonlocation).
 
 ## Worker protocol
 
@@ -35,5 +43,7 @@ Worker failures return an HRESULT so the Shell can choose its own fallback. Empt
 ## Isolated protocol regression
 
 `MockWorker.cpp` is a test-only worker: never place it in an installed shell directory. `BridgeSmoke.cpp` tests a 1024 image larger than a pipe buffer, icon handle ownership, UTF-16 infotips, memory-stream snapshot/cursor restoration, truncated and oversized response rejection, the eight-second timeout, COM unloading, and absence of CoreCLR in the host. `test.ps1` builds and runs these under `artifacts/isolated/bridge-tests`.
+
+`IconIdentitySmoke.cpp` additionally checks distinct paths with identical basenames, same-length rewrites, growing/incomplete downloads, unchanged-file stability, cacheability, supplementary Unicode names through both A/W interfaces, short buffers, missing files, and default/async request behavior. This regression failed against the previous constant-identity DLL before the fix and passes against the corrected DLL. Actual system image-index and pixel comparisons use the repository's real APK Shell integration harness.
 
 These protocol tests do not prove Explorer UI integration, real APK rendering, menu GUI interaction, or coexistence with another runtime; the repository's integration tests cover those separately.

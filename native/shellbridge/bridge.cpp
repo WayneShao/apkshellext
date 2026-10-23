@@ -4,6 +4,7 @@
 #include <shlobj.h>
 #include <thumbcache.h>
 #include <shellapi.h>
+#include <bcrypt.h>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -20,6 +21,35 @@ static const CLSID ids[]={
  {0xdcb629fc,0xf86f,0x456f,{0x8e,0x24,0x98,0xb9,0xb2,0x64,0x3a,0x9b}}};
 struct Handle { HANDLE h=nullptr; Handle()=default; explicit Handle(HANDLE p):h(p){} ~Handle(){if(h&&h!=INVALID_HANDLE_VALUE)CloseHandle(h);} Handle(const Handle&)=delete; Handle& operator=(const Handle&)=delete; };
 static HRESULT error(){DWORD e=GetLastError();return HRESULT_FROM_WIN32(e?e:ERROR_GEN_FAILURE);}
+// The Shell keys icon cache entries by the returned location/index pair.
+// NOTFILENAME and PERINSTANCE do not make a constant/empty location unique.
+// A SHA-256 location fits traditional MAX_PATH buffers and is lossless for A/W
+// callers, including paths outside the system ANSI code page.
+static HRESULT iconIdentity(const std::wstring&path,std::wstring&key,UINT&flags){
+ flags=GIL_NOTFILENAME|GIL_PERINSTANCE;
+ if(path.empty()){flags|=GIL_DONTCACHE;return S_OK;}
+ std::vector<wchar_t> full(32768);DWORD n=GetFullPathNameW(path.c_str(),(DWORD)full.size(),full.data(),nullptr);
+ if(!n||n>=full.size()){flags|=GIL_DONTCACHE;return S_OK;}
+ std::wstring identity(full.data(),n);
+ Handle file(CreateFileW(identity.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr));
+ BY_HANDLE_FILE_INFORMATION info{};FILE_BASIC_INFO basic{};
+ if(file.h==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(file.h,&info)){
+  flags|=GIL_DONTCACHE;
+ }else{
+  uint64_t size=(uint64_t(info.nFileSizeHigh)<<32)|info.nFileSizeLow;
+  uint64_t written=(uint64_t(info.ftLastWriteTime.dwHighDateTime)<<32)|info.ftLastWriteTime.dwLowDateTime;
+  if(size<22)flags|=GIL_DONTCACHE; // Even an empty ZIP needs an EOCD record.
+  if(!GetFileInformationByHandleEx(file.h,FileBasicInfo,&basic,sizeof(basic)))flags|=GIL_DONTCACHE;
+  identity+=L"|"+std::to_wstring(size)+L"|"+std::to_wstring(written)+L"|"+std::to_wstring(basic.ChangeTime.QuadPart)+L"|"+std::to_wstring(info.dwVolumeSerialNumber)+L"|"+std::to_wstring(info.nFileIndexHigh)+L"|"+std::to_wstring(info.nFileIndexLow);
+ }
+ BCRYPT_ALG_HANDLE algorithm=nullptr;
+ if(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0){flags|=GIL_DONTCACHE;return S_OK;}
+ struct Algorithm{BCRYPT_ALG_HANDLE h;~Algorithm(){BCryptCloseAlgorithmProvider(h,0);}} guard{algorithm};
+ BYTE digest[32];if(BCryptHash(algorithm,nullptr,0,(PUCHAR)identity.data(),(ULONG)(identity.size()*sizeof(wchar_t)),digest,sizeof(digest))<0){flags|=GIL_DONTCACHE;return S_OK;}
+ key=L"ApkShellext2:icon:v1:";static const wchar_t hex[]=L"0123456789abcdef";
+ for(BYTE b:digest){key+=hex[b>>4];key+=hex[b&15];}
+ return S_OK;
+}
 static std::wstring quote(const std::wstring&s){std::wstring o=L"\"";size_t n=0;for(wchar_t c:s){if(c==L'\\'){++n;continue;}o.append(c==L'"'?2*n+1:n,L'\\');o+=c;n=0;}o.append(2*n,L'\\');return o+L'"';}
 static std::wstring worker(){wchar_t p[32768];DWORD n=GetModuleFileNameW(module,p,32768);if(!n||n>=32768)throw HRESULT(E_FAIL);std::wstring s(p,n);return s.substr(0,s.find_last_of(L"\\/")+1)+L"ApkShellext2.Worker.exe";}
 static std::wstring command(const std::vector<std::wstring>&args){std::wstring c=quote(worker());for(auto&s:args)c+=L" "+quote(s);if(c.size()>=32767)throw HRESULT(E_INVALIDARG);return c;}
@@ -69,8 +99,8 @@ class Extension final:public IPersistFile,public IExtractIconW,public IExtractIc
  HRESULT STDMETHODCALLTYPE Load(LPCOLESTR p,DWORD)noexcept override GUARD{if(!p)return E_POINTER;path=p;return S_OK;}END
  HRESULT STDMETHODCALLTYPE Save(LPCOLESTR,BOOL)noexcept override{return E_NOTIMPL;}HRESULT STDMETHODCALLTYPE SaveCompleted(LPCOLESTR)noexcept override{return E_NOTIMPL;}
  HRESULT STDMETHODCALLTYPE GetCurFile(LPOLESTR*p)noexcept override{if(!p)return E_POINTER;*p=(LPWSTR)CoTaskMemAlloc((path.size()+1)*sizeof(wchar_t));if(!*p)return E_OUTOFMEMORY;memcpy(*p,path.c_str(),(path.size()+1)*sizeof(wchar_t));return S_OK;}
- HRESULT STDMETHODCALLTYPE GetIconLocation(UINT,LPWSTR p,UINT c,int*i,UINT*f)noexcept override{if(!p||!c||!i||!f)return E_INVALIDARG;p[0]=0;*i=0;*f=GIL_NOTFILENAME|GIL_PERINSTANCE;return S_OK;}
- HRESULT STDMETHODCALLTYPE GetIconLocation(UINT,LPSTR p,UINT c,int*i,UINT*f)noexcept override{if(!p||!c||!i||!f)return E_INVALIDARG;p[0]=0;*i=0;*f=GIL_NOTFILENAME|GIL_PERINSTANCE;return S_OK;}
+ HRESULT STDMETHODCALLTYPE GetIconLocation(UINT request,LPWSTR p,UINT c,int*i,UINT*f)noexcept override GUARD{if(!p||!c||!i||!f)return E_INVALIDARG;p[0]=0;*i=0;*f=GIL_NOTFILENAME|GIL_PERINSTANCE|GIL_DONTCACHE;if(request&GIL_DEFAULTICON)return S_FALSE;std::wstring key;HRESULT hr=iconIdentity(path,key,*f);if(FAILED(hr))return hr;if(key.size()>=c){*f|=GIL_DONTCACHE;return S_OK;}memcpy(p,key.c_str(),(key.size()+1)*sizeof(wchar_t));return S_OK;}END
+ HRESULT STDMETHODCALLTYPE GetIconLocation(UINT request,LPSTR p,UINT c,int*i,UINT*f)noexcept override GUARD{if(!p||!c||!i||!f)return E_INVALIDARG;p[0]=0;*i=0;*f=GIL_NOTFILENAME|GIL_PERINSTANCE|GIL_DONTCACHE;if(request&GIL_DEFAULTICON)return S_FALSE;std::wstring key;HRESULT hr=iconIdentity(path,key,*f);if(FAILED(hr))return hr;if(key.size()>=c){*f|=GIL_DONTCACHE;return S_OK;}for(size_t n=0;n<key.size();++n)p[n]=(char)key[n];p[key.size()]=0;return S_OK;}END
  HRESULT STDMETHODCALLTYPE Extract(LPCWSTR,UINT,HICON*l,HICON*s,UINT sizes)noexcept override GUARD{if(l)*l=nullptr;if(s)*s=nullptr;struct Cleanup{HICON*l;HICON*s;bool okay=false;~Cleanup(){if(!okay){if(l&&*l){DestroyIcon(*l);*l=nullptr;}if(s&&*s){DestroyIcon(*s);*s=nullptr;}}}} cleanup{l,s};if(path.empty())return E_UNEXPECTED;HRESULT hr=S_OK;if(l)hr=icon(path,LOWORD(sizes),l);if(SUCCEEDED(hr)&&s)hr=icon(path,HIWORD(sizes),s);cleanup.okay=SUCCEEDED(hr);return hr;}END
  HRESULT STDMETHODCALLTYPE Extract(LPCSTR,UINT i,HICON*l,HICON*s,UINT z)noexcept override{return Extract((LPCWSTR)nullptr,i,l,s,z);}
  HRESULT STDMETHODCALLTYPE GetInfoTip(DWORD,LPWSTR*p)noexcept override GUARD{if(!p)return E_POINTER;*p=nullptr;std::vector<BYTE>b;HRESULT hr=run({L"--info",path},b);if(FAILED(hr))return hr;if(b.size()<4)return E_FAIL;uint32_t n=u32(b.data());if(n>32768||b.size()!=4+size_t(n)*2)return E_FAIL;*p=(LPWSTR)CoTaskMemAlloc((size_t(n)+1)*2);if(!*p)return E_OUTOFMEMORY;memcpy(*p,b.data()+4,n*2);(*p)[n]=0;return S_OK;}END
