@@ -6,7 +6,7 @@
     <EnableDefaultItems>false</EnableDefaultItems>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
-    <EnableComHosting>true</EnableComHosting>
+    <EnableComHosting Condition="'$(EnableComHosting)' == ''">true</EnableComHosting>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
     <RootNamespace>ApkShellext2</RootNamespace>

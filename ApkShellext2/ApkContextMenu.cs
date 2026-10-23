@@ -76,8 +76,15 @@ namespace ApkShellext2 {
             bool singleSelected = SelectedItemPaths.Count() == 1;
             string appname = "";
             if (singleSelected) {
-                using (AppPackageReader reader = AppPackageReader.Read(SelectedItemPaths.ElementAt(0)))
-                    appname = reader.AppName;
+                string selectedPath = SelectedItemPaths.ElementAt(0);
+                try {
+                    using (AppPackageReader reader = AppPackageReader.Read(selectedPath))
+                        appname = reader.AppName;
+                } catch (Exception ex) {
+                    // A damaged package must not hide preferences or the rest of the menu.
+                    appname = Path.GetFileName(selectedPath);
+                    Log("Cannot read menu package name: " + ex.Message);
+                }
             }
 
             #region Rename Menu

@@ -26,6 +26,10 @@ namespace ApkShellext2 {
             Describe(type);
             using (var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, Environment.Is64BitProcess ? RegistryView.Registry64 : RegistryView.Registry32))
             using (var classes = machine.CreateSubKey(@"Software\Classes")) Register(type, classes);
+            using (var user = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, Environment.Is64BitProcess ? RegistryView.Registry64 : RegistryView.Registry32))
+            using (var classes = user.CreateSubKey(@"Software\Classes"))
+            using (var lookup = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, Environment.Is64BitProcess ? RegistryView.Registry64 : RegistryView.Registry32))
+                RegisterCore(type, classes, lookup);
             Notify();
         }
         internal static void Unregister(Type type) {
@@ -34,16 +38,26 @@ namespace ApkShellext2 {
             using (var classes = machine.OpenSubKey(@"Software\Classes", true)) {
                 if (classes != null) Unregister(type, classes);
             }
+            using (var user = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, Environment.Is64BitProcess ? RegistryView.Registry64 : RegistryView.Registry32))
+            using (var classes = user.OpenSubKey(@"Software\Classes", true)) {
+                if (classes != null) Unregister(type, classes);
+            }
             Notify();
         }
         // Injected root keeps regression tests outside production association keys.
         internal static void Register(Type type, RegistryKey classes) {
+            RegisterCore(type, classes, classes);
+        }
+        // The per-user destination is distinct from the effective ProgID lookup.
+        // Each hive keeps its own predecessor journal; default applications are untouched.
+        internal static void RegisterCore(Type type, RegistryKey classes, RegistryKey lookupClasses) {
             Handler handler = Describe(type);
             if (classes == null) throw new ArgumentNullException("classes");
+            if (lookupClasses == null) throw new ArgumentNullException("lookupClasses");
             using (var journal = classes.CreateSubKey(Journal + "\\" + handler.Id)) {
                 foreach (string extension in handler.Thumbnail ? new[] { ".apk" } : Extensions) {
                     string association = extension;
-                    using (var key = classes.OpenSubKey(extension)) {
+                    using (var key = lookupClasses.OpenSubKey(extension)) {
                         string progId = key == null ? null : key.GetValue(null, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
                         // Never follow a registry path supplied as a purported ProgID.
                         if (!string.IsNullOrWhiteSpace(progId) && progId.IndexOfAny(new[] { '\\', '/', '\0' }) < 0 && !progId.Equals("CLSID", StringComparison.OrdinalIgnoreCase)) association = progId;

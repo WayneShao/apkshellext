@@ -61,6 +61,32 @@ class RegistrationRegression {
                 try { Call("Register", typeof(string), root); } catch (ArgumentException) { rejected = true; }
                 Assert(rejected, "Unrelated type accepted");
                 using (var journal = root.OpenSubKey("ApkShellext2.Registration")) Assert(journal == null, "Registration journal leaked");
+                using (var machine = root.CreateSubKey("Machine"))
+                using (var user = root.CreateSubKey("User"))
+                using (var lookup = root.CreateSubKey("Effective")) {
+                    Put(machine, ".apk", "Machine.Package");
+                    Put(lookup, ".apk", "Androws.apk");
+                    Put(user, @"Androws.apk\DefaultIcon", @"%LOCALAPPDATA%\Tencent\apk.ico", RegistryValueKind.ExpandString);
+                    Put(user, @"Androws.apk\ShellEx\IconHandler", "prior-user-handler");
+                    using (var key = user.CreateSubKey(@"Androws.apk\DefaultIcon")) key.SetValue("Unrelated", "preserve");
+                    MethodInfo core = Helper.GetMethod("RegisterCore", BindingFlags.Static | BindingFlags.NonPublic);
+                    for (int repeat = 0; repeat < 2; repeat++) foreach (var handler in Handlers) {
+                        Call("Register", handler, machine);
+                        core.Invoke(null, new object[] { handler, user, lookup });
+                    }
+                    Assert((string)Get(machine, @"Machine.Package\DefaultIcon") == "%1", "Machine registration missing");
+                    Assert((string)Get(user, @"Androws.apk\DefaultIcon") == "%1", "User static icon override not replaced");
+                    Assert((string)Get(user, @"Androws.apk\ShellEx\IconHandler") == typeof(ApkIconHandler).GUID.ToString("B"), "User effective ProgID handler missing");
+                    Assert(Get(user, ".apk") == null, "User default application created");
+                    Assert((string)Get(lookup, ".apk") == "Androws.apk", "Effective default application changed");
+                    foreach (var handler in Handlers) { Call("Unregister", handler, machine); Call("Unregister", handler, user); }
+                    Assert((string)Get(user, @"Androws.apk\DefaultIcon") == @"%LOCALAPPDATA%\Tencent\apk.ico", "User predecessor icon lost");
+                    using (var key = user.OpenSubKey(@"Androws.apk\DefaultIcon")) Assert(key.GetValueKind(null) == RegistryValueKind.ExpandString, "User predecessor type lost");
+                    Assert((string)Get(user, @"Androws.apk\ShellEx\IconHandler") == "prior-user-handler", "User predecessor handler lost");
+                    Assert((string)Get(user, @"Androws.apk\DefaultIcon", "Unrelated") == "preserve", "Foreign user value removed");
+                    Assert(Get(machine, @"Machine.Package\DefaultIcon") == null, "Machine journal mixed with user journal");
+                    using (var journal = user.OpenSubKey("ApkShellext2.Registration")) Assert(journal == null, "User journal leaked");
+                }
             }
             Console.WriteLine("PASS bounded registration checks=" + checks); return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

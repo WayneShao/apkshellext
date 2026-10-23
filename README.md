@@ -63,7 +63,15 @@ Version 0.2.0.8 focuses on download-safe shared reads, deterministic cleanup and
 
 Upgrade note: if existing files still show old corner badges after replacing the DLL, run `tools/refresh-thumbnails.ps1 -Path <folder>` to re-extract that folder's supported package thumbnails without changing the files. A packaged copy is attached separately to the release.
 
-## v0.3: .NET 10 LTS
+## v0.5: isolated .NET 10 worker
+
+The Shell-facing component is now a native x64 COM DLL (`ApkShellext2.Native.dll`). Parsing, vector rendering and settings run in `ApkShellext2.Worker.exe`, outside Explorer. This avoids v0.4's runtime conflict when another extension such as RaiDrive loads .NET 8 before the .NET 10 handler. Existing package actions are available through a separate actions window from the classic context menu.
+
+Build with `tools/build-worker.ps1`, then `tools/build-shellbridge.ps1` (Zig 0.15.2), and package with `tools/package-isolated.ps1`. Run `tools/test-isolation.ps1` for native/.NET 8/.NET 10 host coexistence and worker failure tests. Deploy the entire generated folder and run its `install.bat` as administrator; `check-registration.bat` detects path or icon association drift. Requires x64 .NET 10 Desktop Runtime for the worker. See [v0.5 notes](docs/release-0.5.0.md).
+
+Do not register the old managed DLL with RegAsm or a `.comhost.dll`: only the native bridge belongs in Explorer. Future third-party overwrites of `DefaultIcon` remain a separate file-association issue; the installer repairs `%1` without replacing the default application.
+
+## Historical v0.3: .NET 10 LTS
 
 The maintained shell extension now targets `net10.0-windows` and uses a native `.comhost.dll`, with exactly four existing shell CLSIDs. Install the x64 .NET 10 Desktop Runtime and deploy the complete release folder. Unregister the old .NET Framework DLL before registering the new host. See [v0.3 migration and installation notes](docs/release-0.3.0.md).
 
